@@ -267,3 +267,92 @@ ok  github.com/mansoormmamnoon/vxlan-tracer/internal/bpfmap  0.447s
 ```
 **Result:** PASS (6 tests)
 **Caveat:** Pure Go, no BPF or kernel dependency. Tests parse fixture from day-03 PTB injection.
+
+---
+
+## 2026-06-14 — inject_ptb.py retest after nexthopmtu= fix — Day 4
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64
+**Command:**
+```sh
+ip netns exec ns2 python3 spikes/inject_ptb.py \
+  --src 192.168.100.2 --dst 192.168.100.1 --dev veth2 --next-hop-mtu 1400 --count 5
+bpftool map dump id <ptb_ingress_counts>
+```
+**Expected:** ptb_count=5, next_hop_mtu=1400 (not 0 as in Day 3)
+**Actual:**
+```json
+[{"key": {"ptb_src_ip": 40151232, "ptb_dst_ip": 23374016},
+  "value": {"ptb_count": 5, "next_hop_mtu": 1400}}]
+```
+**Result:** PASS — next_hop_mtu=1400 confirmed after switching inject_ptb.py to `nexthopmtu=` field
+**Caveat:** None. Fix confirmed working. See evidence/day-04-ptb-ingress-retest.md.
+
+---
+
+## 2026-06-14 — kprobe/icmp_rcv attach via probe_attach — Day 4
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64, libbpf
+**Command:**
+```sh
+clang -O2 -g -target bpf -I/usr/include -I/usr/include/aarch64-linux-gnu \
+  -c bpf/kprobes.bpf.c -o /tmp/kprobes.bpf.o
+gcc -O2 -o /tmp/probe_attach spikes/probe_attach.c -lbpf
+/tmp/probe_attach /tmp/kprobes.bpf.o 5
+bpftool prog list | grep kprobe_icmp_rcv
+```
+**Expected:** kprobe attaches; bpftool shows jited program with icmp_rcv_total map
+**Actual:**
+```
+(compile) 0 warnings, 96B bytecode, 5.5K ELF, section kprobe/icmp_rcv
+182: kprobe  name kprobe_icmp_rcv  tag ...  jited 192B  map_ids 87
+```
+**Result:** PASS — kprobe attaches via libbpf on kernel 6.10.14
+**Caveat:** bpftool v5.15.199 (not matching running kernel 6.10.14); JIT confirms acceptance.
+
+---
+
+## 2026-06-14 — unsuppressed PTB path: TC ingress + icmp_rcv both count — Day 4
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64
+**Command:**
+```sh
+# No iptables DROP rule
+ip netns exec ns2 python3 spikes/inject_ptb.py \
+  --src 192.168.100.2 --dst 192.168.100.1 --dev veth2 --next-hop-mtu 1400 --count 5
+bpftool map dump id <ptb_ingress_total>
+bpftool map dump id <icmp_rcv_total>
+```
+**Expected:** Both counters = 5 (PTBs arrive and reach icmp_rcv)
+**Actual:**
+```
+ptb_ingress_total: [{"key": 0, "value": 5}]
+icmp_rcv_total:    [{"key": 0, "value": 5}]
+```
+**Result:** PASS — both counters match; PTBs traversed netfilter INPUT and reached icmp_rcv
+**Caveat:** See evidence/day-04-unsuppressed.md. icmp_rcv counts ALL ICMP; isolated by lab.
+
+---
+
+## 2026-06-14 — PTB suppression detection proof — Day 4
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64
+**Command:**
+```sh
+ip netns exec ns1 iptables -A INPUT -p icmp --icmp-type fragmentation-needed -j DROP
+ip netns exec ns2 python3 spikes/inject_ptb.py \
+  --src 192.168.100.2 --dst 192.168.100.1 --dev veth2 --next-hop-mtu 1400 --count 5
+bpftool map dump id <ptb_ingress_total>
+bpftool map dump id <icmp_rcv_total>
+ip netns exec ns1 iptables -L INPUT -v -n
+```
+**Expected:** ptb_ingress_total=5, icmp_rcv_total=0, iptables=5 drops
+**Actual:**
+```
+ptb_ingress_total: [{"key": 0, "value": 5}]
+icmp_rcv_total:    [{"key": 0, "value": 0}]
+iptables: 5 pkts/280 bytes matched DROP rule (icmptype 3 code 4)
+```
+**Result:** PASS — PTB suppression detected: TC ingress > 0, icmp_rcv == 0
+**Caveat:** Lab uses synthetic PTBs. In production, PTBs arrive from cloud fabric. Mechanism
+is identical. See evidence/day-04-ptb-suppression.md for kernel path diagram.

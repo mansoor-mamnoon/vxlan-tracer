@@ -142,11 +142,70 @@ next_hop_mtu=0 in the BPF map. Fixed in Commit 6.
 `/usr/sbin/bpftool` is a wrapper that checks running kernel version and fails
 on kernel 6.10.14. Use the versioned path directly.
 
-## Next verification step (Day 4)
+## Day 4 findings (Docker linuxkit 6.10.14-linuxkit aarch64)
 
-1. Implement `kprobes.bpf.c`: ip_do_fragment kprobe + icmp_rcv tracepoint/kprobe
-2. Re-run inject_ptb.py with nexthopmtu= fix; verify next_hop_mtu=1400 in map
-3. Blackhole topology: vxlan0 MTU=1450, underlay MTU=1400; confirm flow_state
-   shows max_outer_ip_len > 1400 for the oversized flow
-4. Suppression signal demo: ptb_ingress_count > 0 AND icmp_rcv == 0 with
-   iptables DROP rule for ICMP type 3 code 4
+### Finding 10: icmp_rcv IS a T symbol and attaches via kprobe
+
+```
+ffff800080xxxxxx T icmp_rcv   (confirmed in /proc/kallsyms Day 2)
+```
+
+libbpf probe_attach.c attached kprobe/icmp_rcv via `bpf_program__attach_kprobe`.
+bpftool confirmed: `182: kprobe name kprobe_icmp_rcv jited 192B map_ids 87`.
+
+### Finding 11: icmp_rcv fires AFTER netfilter INPUT — proven by counter experiment
+
+Without iptables DROP: ptb_ingress_total=5, icmp_rcv_total=5 (both match).
+With iptables DROP on icmptype 3 code 4: ptb_ingress_total=5, icmp_rcv_total=0.
+The DROP rule in netfilter INPUT prevents icmp_rcv from being called.
+
+This proves the hook ordering:
+```
+TC ingress (pre-nf) → netfilter INPUT → icmp_rcv (post-nf)
+```
+
+### Finding 12: CO-RE not needed for icmp_rcv kprobe counting
+
+kprobes.bpf.c does not access any struct fields from the skb. It only
+increments a counter. No vmlinux.h, no CO-RE annotations. Compiled without
+`-D__TARGET_ARCH_arm64` or BTF-related flags. This keeps the BPF simpler.
+
+Caveat: in production, the kprobe would need to parse the skb to filter for
+ICMP type=3 code=4 only, which DOES require CO-RE or a manual offset table.
+Deferred to Day 5.
+
+### Finding 13: stale vxlan0 MTU persists after underlay MTU reduction
+
+Kernel 6.10.14 sets vxlan0 MTU = min(underlay-50, requested) at creation time.
+If the underlay MTU is later reduced (e.g., via `ip link set veth1 mtu 1400`),
+the vxlan0 MTU is NOT automatically updated. The stale MTU remains at 1450.
+
+This is the real-world VXLAN blackhole condition: containers see overlay MTU
+as 1450, send packets that become 1438-byte outer packets, which exceed the
+1400-byte underlay MTU and are silently fragmented (DF=0) or dropped (DF=1).
+
+### Finding 14: ip_do_fragment fires in both namespaces for each oversized ping
+
+The ftrace kprobe on ip_do_fragment is global (all namespaces). For a 3-ping
+test with ns1→ns2: 3 events from ns1 (send path) + 3 events from ns2 (reply
+path) = 6 events total. Both sides have underlay MTU=1400 and both fragment.
+
+## Updated hook confidence table (post-Day 4)
+
+| Hook | Verified how | Confidence |
+|------|-------------|------------|
+| ip_do_fragment symbol present on 6.10.14 | /proc/kallsyms confirmed | **CONFIRMED** |
+| ip_do_fragment fires for DF=0 oversized outer | ftrace kprobe: 20 events/10 pings | **CONFIRMED** |
+| ip_do_fragment fires for stale-MTU scenario | ftrace kprobe: 6 events/3 pings | **CONFIRMED** |
+| ip_do_fragment not inlined on 6.10.14 | ftrace fires at +0x0 | **CONFIRMED** |
+| icmp_send NOT a T symbol on 6.10.14 | /proc/kallsyms negative | **CONFIRMED** |
+| icmp_rcv IS a T symbol on 6.10.14 | /proc/kallsyms confirmed Day 2 | **CONFIRMED** |
+| icmp_rcv attaches via libbpf kprobe | bpftool: id 182, jited 192B | **CONFIRMED** |
+| icmp_rcv fires AFTER netfilter INPUT | counter experiment: unsuppressed=5/5 | **CONFIRMED** |
+| iptables DROP before icmp_rcv | counter experiment: suppressed=5/0, drops=5 | **CONFIRMED** |
+| PTB suppression detectable: TC>0 + icmp_rcv==0 | both probes running; lab proven | **CONFIRMED** |
+| BTF vmlinux present on linuxkit | file size 6.2MB confirmed | **CONFIRMED** |
+| TC egress vxlan0 fires before VXLAN encap | flow_state populated; max_outer_ip_len=1478 | **CONFIRMED** |
+| TC ingress eth0 fires before netfilter | ptb_count=5 after 5 synthetic PTBs | **CONFIRMED** |
+| bpftrace can read skb->dev->name in kprobe | Not verified (bpftrace broken on linuxkit) | Unknown |
+| icmp_rcv kprobe filters type=3 code=4 only | Not implemented (counts all ICMP) | Not yet |

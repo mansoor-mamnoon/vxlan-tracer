@@ -18,11 +18,17 @@ namespace environment. No production deployment required.
 - [x] evidence/day-01.md, evidence/day-02.md, evidence/test-results.md
 - [x] `tc_egress_vxlan0.bpf.c` — TC egress BPF for inner packet observation (Day 3)
 - [x] `tc_ingress_eth0.bpf.c` — TC ingress BPF for pre-netfilter PTB counting (Day 3)
-- [ ] `kprobes.bpf.c` — ip_do_fragment kprobe + icmp_rcv fentry
-       NOTE: icmp_send must use tracepoint:net:icmp_send on kernel 6.10+
+- [x] `kprobes.bpf.c` — icmp_rcv kprobe for post-netfilter PTB counting (Day 4)
+       NOTE: icmp_send not a T symbol on 6.10.14; icmp_rcv used instead
+       NOTE: currently counts all ICMP; needs CO-RE filtering for type=3 code=4 (Day 5)
+- [x] PTB suppression detection: TC ingress > 0 AND icmp_rcv == 0 (Day 4, proven in lab)
+- [x] scripts/diagnose-from-bpftool.sh — three-verdict combiner (Day 4)
+- [x] docs/map-lifecycle.md — BPF map pinning rationale (Day 4)
+- [ ] icmp_rcv kprobe: CO-RE skb parsing to filter type=3 code=4 only (Day 5)
 - [ ] Go controller: clsact qdisc setup + BPF program attachment
-- [ ] Go controller: map polling loop
-- [ ] Diagnosis engine: MTU arithmetic + suppression detection
+- [ ] Go controller: BPF link attachment for kprobe (replaces probe_attach.c)
+- [ ] Go controller: map polling loop with pinned maps (/sys/fs/bpf/vxlan-tracer/)
+- [ ] Diagnosis engine: MTU arithmetic + suppression detection (Go CLI)
 - [ ] Structured output (human-readable + JSON)
 - [ ] `make smoke-small` and `make smoke-large` passing end-to-end with BPF loaded
 - [ ] bpftrace ip_do_fragment.bt executed with field output (needs Lima VM + bpftrace 0.16+)
