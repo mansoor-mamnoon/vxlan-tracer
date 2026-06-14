@@ -1,0 +1,29 @@
+# Build output
+dist/
+*.o
+*.a
+*.so
+*.d
+
+# Go
+/vxlan-tracer
+/cmd/vxlan-tracer/vxlan-tracer
+
+# BPF generated objects
+bpf/*.o
+bpf/bpf_bpfel.go
+bpf/bpf_bpfeb.go
+
+# Clang/LLVM
+*.bc
+
+# Editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Lab artifacts
+/tmp/
+lab.log
