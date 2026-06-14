@@ -58,24 +58,63 @@ measure whether icmp_rcv was subsequently invoked. vxlan-tracer provides both
 numbers simultaneously.
 **Status:** Documented in docs/forbidden-claims.md, claim #8.
 
-## Hooks confirmed by architecture analysis (not yet tested on kernel)
+## Day 2 findings (Docker linuxkit 6.10.14-linuxkit aarch64)
+
+### Finding 1: ip_do_fragment IS a T symbol and fires as expected
+
+```
+ffff800080ff71d8 T ip_do_fragment
+```
+
+Raw ftrace kprobe confirmed: 20 ip_do_fragment events for 10 large pings.
+0 events for small pings. The hook is reliable and non-inlined on this kernel.
+
+### Finding 2: icmp_send is NOT a T symbol on kernel 6.10.14
+
+icmp_send does not appear as a T symbol in /proc/kallsyms. Exists only as:
+```
+__traceiter_icmp_send  T
+__probestub_icmp_send  T
+__bpf_trace_icmp_send  t
+```
+Use `tracepoint:net:icmp_send` instead of `kprobe:icmp_send` on this kernel.
+(tracepoint provides type+code but not next_hop_mtu — see icmp_send.bt comments)
+
+### Finding 3: BTF is present on linuxkit
+
+`/sys/kernel/btf/vmlinux` exists (6.2 MB). fentry programs are supported.
+
+### Finding 4: locally-generated PTBs bypass netfilter INPUT
+
+For the DF=1 scenario (kernel generating PTBs for its own packets), the ICMP
+PTBs do not traverse the INPUT chain. iptables DROP rule shows 0 counter hits.
+The suppression detection is designed for externally-arriving PTBs (cloud fabric).
+
+### Finding 5: kernel 6.10+ enforces correct vxlan0 MTU at creation time
+
+`ip link set vxlan0 mtu 1500` returns `RTNETLINK answers: Invalid argument` when
+underlay MTU is 1500. Kernel enforces max vxlan0 MTU = underlay - overhead.
+Alternative topology: reduce underlay MTU after vxlan0 creation.
+
+## Updated hook confidence table (post-Day 2)
 
 | Hook | Verified how | Confidence |
 |------|-------------|------------|
-| TC egress vxlan0 fires before VXLAN encap | Kernel source analysis | High |
-| ip_do_fragment fires on DF=0 oversized outer | Kernel source analysis | High |
-| TC ingress eth0 fires before netfilter | Kernel documentation | High |
-| icmp_rcv fires after netfilter INPUT | Kernel documentation | High |
-| ip_do_fragment symbol in /proc/kallsyms on 5.15 | Not verified (macOS dev env) | Unknown |
-| bpftrace can read skb->dev->name in kprobe | Not verified | Unknown |
-| fentry/icmp_rcv requires BTF available | Known requirement; /sys/kernel/btf/vmlinux must exist | Assumed |
+| ip_do_fragment symbol present on 6.10.14 | /proc/kallsyms confirmed | **CONFIRMED** |
+| ip_do_fragment fires for DF=0 oversized outer | ftrace kprobe: 20 events/10 pings | **CONFIRMED** |
+| ip_do_fragment not inlined on 6.10.14 | ftrace fires at +0x0 | **CONFIRMED** |
+| icmp_send NOT a T symbol on 6.10.14 | /proc/kallsyms negative | **CONFIRMED** |
+| icmp_rcv IS a T symbol on 6.10.14 | /proc/kallsyms confirmed | **CONFIRMED** |
+| BTF vmlinux present on linuxkit | file size 6.2MB confirmed | **CONFIRMED** |
+| TC egress vxlan0 fires before VXLAN encap | Kernel source analysis | High (unrun) |
+| TC ingress eth0 fires before netfilter | Kernel documentation | High (unrun) |
+| icmp_rcv fires after netfilter INPUT | Kernel documentation | High (unrun) |
+| bpftrace can read skb->dev->name in kprobe | Not verified (bpftrace broken on linuxkit) | Unknown |
 
-## Next verification step
+## Next verification step (Day 3)
 
-Run on a Linux 5.15 host:
-```sh
-grep ip_do_fragment /proc/kallsyms
-ls /sys/kernel/btf/vmlinux
-sudo bpftrace spikes/bpftrace/ip_do_fragment.bt
-```
-Record results in evidence/test-results.md.
+1. Lima VM with bpftrace 0.16+:
+   - Run `spikes/bpftrace/ip_do_fragment.bt` during large traffic
+   - Confirm `outer_ip_len`, `dev_mtu`, `ip_excess` field values from skb
+2. Implement `bpf/tc_ingress_eth0.bpf.c` and attach to underlay interface
+3. Test inject_ptb.py with TC ingress BPF active; verify suppression signal

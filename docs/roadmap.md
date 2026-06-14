@@ -8,17 +8,24 @@ namespace environment. No production deployment required.
 ### V0 components
 
 - [x] Repository scaffold and docs
-- [x] Lab topology (netns + veth + vxlan)
+- [x] Lab topology (netns + veth + vxlan) — confirmed working on Docker linuxkit 6.10.14
 - [x] bpftrace spike probes (ip_do_fragment, icmp_send, ptb_suppression)
+- [x] MTU arithmetic checker with correct Go tests (8 tests pass)
+- [x] linux-env-check.sh — PASS/WARN/FAIL pre-flight
+- [x] inject_ptb.py — synthetic ICMP PTB injection via scapy
+- [x] ip_do_fragment hook confirmed on kernel 6.10.14 (ftrace: 2 events/oversized-pkt)
+- [x] DF=1 blackhole scenario confirmed (100% packet loss with df=set + stale MTU)
+- [x] evidence/day-01.md, evidence/day-02.md, evidence/test-results.md
 - [ ] `tc_egress_vxlan0.bpf.c` — TC egress BPF for inner packet observation
 - [ ] `tc_ingress_eth0.bpf.c` — TC ingress BPF for pre-netfilter PTB counting
-- [ ] `kprobes.bpf.c` — ip_do_fragment + icmp_send + icmp_rcv fentry
+- [ ] `kprobes.bpf.c` — ip_do_fragment kprobe + icmp_rcv fentry
+       NOTE: icmp_send must use tracepoint:net:icmp_send on kernel 6.10+
 - [ ] Go controller: clsact qdisc setup + BPF program attachment
 - [ ] Go controller: map polling loop
 - [ ] Diagnosis engine: MTU arithmetic + suppression detection
 - [ ] Structured output (human-readable + JSON)
-- [ ] `make smoke-small` and `make smoke-large` passing
-- [ ] `evidence/day-01.md` and `evidence/test-results.md` complete
+- [ ] `make smoke-small` and `make smoke-large` passing end-to-end with BPF loaded
+- [ ] bpftrace ip_do_fragment.bt executed with field output (needs Lima VM + bpftrace 0.16+)
 
 ### V0 scope limitations
 
