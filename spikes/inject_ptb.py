@@ -90,11 +90,15 @@ def main():
     # VXLAN uses destination UDP port 4789
     original_udp = UDP(sport=12345, dport=4789)
 
-    # Build the ICMP PTB
+    # Build the ICMP PTB.
+    # Scapy ICMP type=3 layout (bytes after checksum):
+    #   bytes 4-5: ShortField("unused", 0)   → icmph->un.frag.__unused
+    #   bytes 6-7: ShortField("nexthopmtu", 0) → icmph->un.frag.mtu  ← BPF reads this
+    # Must use 'nexthopmtu', NOT 'unused', for the kernel/BPF to see the MTU value.
     icmp_ptb = ICMP(
         type=3,              # ICMP_DEST_UNREACH
         code=4,              # ICMP_FRAG_NEEDED
-        unused=args.next_hop_mtu,  # scapy uses 'unused' field; for code=4, upper 16 bits = 0, lower = next_hop_mtu
+        nexthopmtu=args.next_hop_mtu,
     )
 
     # Outer IP carrying the ICMP
