@@ -16,8 +16,8 @@ namespace environment. No production deployment required.
 - [x] ip_do_fragment hook confirmed on kernel 6.10.14 (ftrace: 2 events/oversized-pkt)
 - [x] DF=1 blackhole scenario confirmed (100% packet loss with df=set + stale MTU)
 - [x] evidence/day-01.md, evidence/day-02.md, evidence/test-results.md
-- [ ] `tc_egress_vxlan0.bpf.c` — TC egress BPF for inner packet observation
-- [ ] `tc_ingress_eth0.bpf.c` — TC ingress BPF for pre-netfilter PTB counting
+- [x] `tc_egress_vxlan0.bpf.c` — TC egress BPF for inner packet observation (Day 3)
+- [x] `tc_ingress_eth0.bpf.c` — TC ingress BPF for pre-netfilter PTB counting (Day 3)
 - [ ] `kprobes.bpf.c` — ip_do_fragment kprobe + icmp_rcv fentry
        NOTE: icmp_send must use tracepoint:net:icmp_send on kernel 6.10+
 - [ ] Go controller: clsact qdisc setup + BPF program attachment

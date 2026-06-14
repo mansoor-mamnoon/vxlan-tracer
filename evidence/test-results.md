@@ -176,3 +176,94 @@ Full bpftrace execution requires bpftrace 0.16+ on a VM with matching kernel hea
 ```
 **Result:** PASS — DF=1 blackhole confirmed
 **Caveat:** None. Small pings unaffected (3/3 received).
+
+---
+
+## 2026-06-14 — tc_ingress_eth0.bpf.c compile + BPF verifier — Day 3
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64, clang 14
+**Command:**
+```sh
+clang -O2 -g -target bpf -I/usr/include -I/usr/include/aarch64-linux-gnu \
+  -Wall -Wno-unused-value -Wno-pointer-sign \
+  -c bpf/tc_ingress_eth0.bpf.c -o /tmp/tc_ingress_eth0.bpf.o
+tc filter add dev veth1 ingress bpf da obj /tmp/tc_ingress_eth0.bpf.o sec tc
+tc filter show dev veth1 ingress
+```
+**Expected:** Compile 0 warnings; tc filter shows `jited`
+**Actual:**
+```
+(compile) Exit: 0, 0 warnings, 18K ELF object
+(tc filter) direct-action not_in_hw id 157 tag 20bd2d524d2b4592 jited
+```
+**Result:** PASS — BPF verifier accepted; JIT compiled
+**Caveat:** First compile attempt failed with IPPROTO_ICMP undefined; fixed by adding `#include <linux/in.h>`
+
+---
+
+## 2026-06-14 — synthetic PTB injection (5 PTBs) — Day 3
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64
+**Command:**
+```sh
+ip netns exec ns2 python3 spikes/inject_ptb.py \
+  --src 192.168.100.2 --dst 192.168.100.1 --dev veth2 --next-hop-mtu 1400 --count 5
+bpftool map dump id <ptb_ingress_counts>
+bpftool map dump id <ptb_ingress_total>
+```
+**Expected:** ptb_count=5, ptb_ingress_total=5, next_hop_mtu=1400
+**Actual:**
+```
+ptb_count: 5 ✓
+ptb_ingress_total: 5 ✓
+next_hop_mtu: 0 ✗ (bug in inject_ptb.py: used unused= instead of nexthopmtu=)
+```
+**Result:** PARTIAL — count correct; MTU field 0 due to test script bug (fixed in same commit)
+**Caveat:** inject_ptb.py fixed to use `nexthopmtu=` field; re-test scheduled for Day 4.
+
+---
+
+## 2026-06-14 — tc_egress_vxlan0 attach and flow map — Day 3
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64
+**Command:**
+```sh
+tc filter add dev vxlan0 egress bpf da obj /tmp/tc_egress_vxlan0.bpf.o sec tc
+ping -c 3 -s 56 10.0.0.2   # small traffic
+ping -c 3 -s 1400 10.0.0.2  # large traffic
+bpftool map dump id <flow_state>
+```
+**Expected:** jited attachment; flow_state has 1 entry; max_inner_ip_len matches large ping
+**Actual:**
+```
+tc filter: direct-action not_in_hw id 161 tag 8d5c7a9a173ff918 jited ✓
+small ping 3/3 received ✓
+large ping 3/3 received ✓
+flow_state: src=10.0.0.1 dst=10.0.0.2 proto=ICMP pkt_count=6
+  max_inner_ip_len=1428  max_outer_ip_len=1478 (= 1428+50) ✓
+ptb_ingress_counts: [] (empty — correct, outer IP 1478 < underlay MTU 1500) ✓
+```
+**Result:** PASS
+**Caveat:** Blackhole scenario (outer IP > underlay MTU) not yet tested here;
+requires alternative topology (underlay MTU=1400, scheduled for Day 4).
+
+---
+
+## 2026-06-14 — internal/bpfmap Go unit tests — Day 3
+
+**Environment:** macOS 25.0.0 arm64, go1.26.3
+**Command:** `go test ./internal/bpfmap/ -v`
+**Expected:** All 6 tests pass; IP conversion correct for VTEP addresses
+**Actual:**
+```
+--- PASS: TestParsePTBCounts (0.00s)
+--- PASS: TestParsePTBCountsEmpty (0.00s)
+--- PASS: TestParsePTBCountsBadJSON (0.00s)
+--- PASS: TestParsePTBTotal (0.00s)
+--- PASS: TestParsePTBTotalZero (0.00s)
+--- PASS: TestLeU32ToIP (0.00s)
+PASS
+ok  github.com/mansoormmamnoon/vxlan-tracer/internal/bpfmap  0.447s
+```
+**Result:** PASS (6 tests)
+**Caveat:** Pure Go, no BPF or kernel dependency. Tests parse fixture from day-03 PTB injection.

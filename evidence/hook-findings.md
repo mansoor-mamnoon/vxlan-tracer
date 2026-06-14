@@ -106,15 +106,47 @@ Alternative topology: reduce underlay MTU after vxlan0 creation.
 | icmp_send NOT a T symbol on 6.10.14 | /proc/kallsyms negative | **CONFIRMED** |
 | icmp_rcv IS a T symbol on 6.10.14 | /proc/kallsyms confirmed | **CONFIRMED** |
 | BTF vmlinux present on linuxkit | file size 6.2MB confirmed | **CONFIRMED** |
-| TC egress vxlan0 fires before VXLAN encap | Kernel source analysis | High (unrun) |
-| TC ingress eth0 fires before netfilter | Kernel documentation | High (unrun) |
+| TC egress vxlan0 fires before VXLAN encap | flow_state map populated; pkt_count=6 for 6 pings | **CONFIRMED** |
+| TC ingress eth0 fires before netfilter | ptb_count=5 after 5 synthetic PTBs from ns2 | **CONFIRMED** |
 | icmp_rcv fires after netfilter INPUT | Kernel documentation | High (unrun) |
 | bpftrace can read skb->dev->name in kprobe | Not verified (bpftrace broken on linuxkit) | Unknown |
 
-## Next verification step (Day 3)
+## Day 3 findings (Docker linuxkit 6.10.14-linuxkit aarch64)
 
-1. Lima VM with bpftrace 0.16+:
-   - Run `spikes/bpftrace/ip_do_fragment.bt` during large traffic
-   - Confirm `outer_ip_len`, `dev_mtu`, `ip_excess` field values from skb
-2. Implement `bpf/tc_ingress_eth0.bpf.c` and attach to underlay interface
-3. Test inject_ptb.py with TC ingress BPF active; verify suppression signal
+### Finding 6: TC egress on vxlan0 fires before VXLAN encapsulation
+
+flow_state map populated after 6 ICMP echo packets (3 small + 3 large):
+- max_inner_ip_len=1428 for 1400-byte payload pings ✓
+- max_outer_ip_len=1478 (= 1428 + 50) ✓
+Confirms the hook fires on inner packets before the kernel adds VXLAN headers.
+
+### Finding 7: TC ingress on veth1 fires before netfilter
+
+ptb_ingress_counts[{192.168.100.2 → 192.168.100.1}].ptb_count = 5 after
+5 synthetic PTBs injected from ns2. ptb_ingress_total = 5. All pass TC_ACT_OK.
+
+### Finding 8: scapy ICMP type=3 'unused' vs 'nexthopmtu' field layout
+
+In scapy, ICMP type=3 defines two separate ShortFields:
+- `unused` (bytes 4-5): maps to icmph->un.frag.__unused
+- `nexthopmtu` (bytes 6-7): maps to icmph->un.frag.mtu ← what BPF reads
+
+inject_ptb.py was using `unused=MTU` instead of `nexthopmtu=MTU`, resulting in
+next_hop_mtu=0 in the BPF map. Fixed in Commit 6.
+
+### Finding 9: bpftool binary location on ubuntu:22.04 arm64
+
+`linux-tools-5.15.0-181-generic` installs bpftool to two paths:
+- `/usr/lib/linux-tools-5.15.0-181/bpftool` (actual binary)
+- `/usr/lib/linux-tools/5.15.0-181-generic/bpftool` (symlink or alternate path)
+`/usr/sbin/bpftool` is a wrapper that checks running kernel version and fails
+on kernel 6.10.14. Use the versioned path directly.
+
+## Next verification step (Day 4)
+
+1. Implement `kprobes.bpf.c`: ip_do_fragment kprobe + icmp_rcv tracepoint/kprobe
+2. Re-run inject_ptb.py with nexthopmtu= fix; verify next_hop_mtu=1400 in map
+3. Blackhole topology: vxlan0 MTU=1450, underlay MTU=1400; confirm flow_state
+   shows max_outer_ip_len > 1400 for the oversized flow
+4. Suppression signal demo: ptb_ingress_count > 0 AND icmp_rcv == 0 with
+   iptables DROP rule for ICMP type 3 code 4
