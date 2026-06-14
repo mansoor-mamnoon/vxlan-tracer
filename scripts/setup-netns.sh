@@ -1,14 +1,31 @@
 #!/usr/bin/env bash
 # scripts/setup-netns.sh
 #
-# Creates the two-namespace VXLAN lab topology.
-# Must run as root.
-# Tested on Linux 5.15+. Does NOT run on macOS.
+# Creates a two-namespace VXLAN lab that reproduces the MTU blackhole condition.
+# Must run as root. Requires Linux. Does NOT run on macOS.
 #
-# After setup:
-#   ns1: vxlan0=10.244.0.1/24, veth1=192.168.100.1/24
-#   ns2: vxlan0=10.244.0.2/24, veth2=192.168.100.2/24
-#   VXLAN VNI 42, port 4789, vxlan0 MTU intentionally 1500 (wrong: should be 1450)
+# Topology:
+#   ns1: vxlan0=10.244.0.1/24 (MTU auto-set by kernel), veth1=192.168.100.1/24
+#   ns2: vxlan0=10.244.0.2/24 (MTU auto-set by kernel), veth2=192.168.100.2/24
+#   VXLAN VNI 42, port 4789
+#
+# Blackhole reproduction strategy:
+#   Kernel 6.10+ enforces correct vxlan0 MTU at creation time and rejects
+#   attempts to set it higher than (underlay_mtu - 50). We cannot reproduce
+#   the classic Flannel misconfiguration (vxlan0 MTU=1500 with underlay MTU=1500)
+#   directly on this kernel.
+#
+#   Instead: create vxlan0 while underlay MTU=1500 (kernel sets vxlan0 MTU=1450),
+#   then reduce underlay MTU to 1400 AFTER vxlan0 creation. The kernel does not
+#   auto-adjust vxlan0 MTU when underlay changes. Now:
+#     - vxlan0 MTU=1450 (stale; was correct for underlay 1500)
+#     - underlay MTU=1400
+#     - max safe inner IP for underlay 1400: 1400 - 50 = 1350
+#     - inner IP > 1350 → outer IP > 1400 → ip_do_fragment fires (DF=0 default)
+#
+#   This reproduces the real ops scenario: underlay MTU changed without updating
+#   overlay MTU (e.g., cloud provider reduced jumbo frames, or team added a VPN
+#   appliance with lower MTU in the underlay path).
 
 set -euo pipefail
 
@@ -22,8 +39,8 @@ OVERLAY_IP1="10.244.0.1"
 OVERLAY_IP2="10.244.0.2"
 VNI=42
 VXLAN_PORT=4789
-WRONG_MTU=1500       # intentionally wrong; correct is 1450
-UNDERLAY_MTU=1500
+INITIAL_UNDERLAY_MTU=1500   # underlay MTU during vxlan0 creation (kernel sets vxlan0=1450)
+REDUCED_UNDERLAY_MTU=1400   # reduced after creation; vxlan0 stays at 1450 (stale)
 WWW_DIR="/tmp/vxlan-lab-www"
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -48,17 +65,17 @@ ip link add "$VETH1" type veth peer name "$VETH2"
 ip link set "$VETH1" netns "$NS1"
 ip link set "$VETH2" netns "$NS2"
 
-echo "[setup] Configuring $NS1 underlay ($VETH1 $UNDERLAY_IP1/24)..."
+echo "[setup] Configuring $NS1 underlay ($VETH1 $UNDERLAY_IP1/24, MTU=$INITIAL_UNDERLAY_MTU)..."
 ip netns exec "$NS1" ip addr add "$UNDERLAY_IP1/24" dev "$VETH1"
-ip netns exec "$NS1" ip link set "$VETH1" up mtu "$UNDERLAY_MTU"
+ip netns exec "$NS1" ip link set "$VETH1" up mtu "$INITIAL_UNDERLAY_MTU"
 ip netns exec "$NS1" ip link set lo up
 
-echo "[setup] Configuring $NS2 underlay ($VETH2 $UNDERLAY_IP2/24)..."
+echo "[setup] Configuring $NS2 underlay ($VETH2 $UNDERLAY_IP2/24, MTU=$INITIAL_UNDERLAY_MTU)..."
 ip netns exec "$NS2" ip addr add "$UNDERLAY_IP2/24" dev "$VETH2"
-ip netns exec "$NS2" ip link set "$VETH2" up mtu "$UNDERLAY_MTU"
+ip netns exec "$NS2" ip link set "$VETH2" up mtu "$INITIAL_UNDERLAY_MTU"
 ip netns exec "$NS2" ip link set lo up
 
-echo "[setup] Creating VXLAN interface in $NS1 (wrong MTU=$WRONG_MTU)..."
+echo "[setup] Creating VXLAN in $NS1 (kernel will auto-set MTU=$((INITIAL_UNDERLAY_MTU - 50)))..."
 ip netns exec "$NS1" ip link add vxlan0 type vxlan \
     id "$VNI" \
     remote "$UNDERLAY_IP2" \
@@ -66,9 +83,9 @@ ip netns exec "$NS1" ip link add vxlan0 type vxlan \
     dstport "$VXLAN_PORT" \
     dev "$VETH1"
 ip netns exec "$NS1" ip addr add "$OVERLAY_IP1/24" dev vxlan0
-ip netns exec "$NS1" ip link set vxlan0 up mtu "$WRONG_MTU"
+ip netns exec "$NS1" ip link set vxlan0 up
 
-echo "[setup] Creating VXLAN interface in $NS2 (wrong MTU=$WRONG_MTU)..."
+echo "[setup] Creating VXLAN in $NS2 (kernel will auto-set MTU=$((INITIAL_UNDERLAY_MTU - 50)))..."
 ip netns exec "$NS2" ip link add vxlan0 type vxlan \
     id "$VNI" \
     remote "$UNDERLAY_IP1" \
@@ -76,15 +93,24 @@ ip netns exec "$NS2" ip link add vxlan0 type vxlan \
     dstport "$VXLAN_PORT" \
     dev "$VETH2"
 ip netns exec "$NS2" ip addr add "$OVERLAY_IP2/24" dev vxlan0
-ip netns exec "$NS2" ip link set vxlan0 up mtu "$WRONG_MTU"
+ip netns exec "$NS2" ip link set vxlan0 up
+
+VXLAN_MTU=$(ip netns exec "$NS1" ip link show vxlan0 | grep -oP 'mtu \K[0-9]+' | head -1)
+echo "[setup] vxlan0 MTU after creation: $VXLAN_MTU (expected $((INITIAL_UNDERLAY_MTU - 50)))"
+
+echo "[setup] Reducing underlay MTU to $REDUCED_UNDERLAY_MTU AFTER vxlan0 creation..."
+echo "[setup]   vxlan0 MTU stays at $VXLAN_MTU (stale); underlay now $REDUCED_UNDERLAY_MTU"
+echo "[setup]   max safe inner IP = $((REDUCED_UNDERLAY_MTU - 50)); inner IP > that → ip_do_fragment"
+ip netns exec "$NS1" ip link set "$VETH1" mtu "$REDUCED_UNDERLAY_MTU"
+ip netns exec "$NS2" ip link set "$VETH2" mtu "$REDUCED_UNDERLAY_MTU"
 
 echo "[setup] Verifying underlay reachability..."
 ip netns exec "$NS1" ping -c 1 -W 2 "$UNDERLAY_IP2" > /dev/null \
     && echo "[setup] underlay ping: OK" \
     || echo "[setup] WARNING: underlay ping failed"
 
-echo "[setup] Verifying overlay reachability (small ping)..."
-ip netns exec "$NS1" ping -c 1 -W 2 "$OVERLAY_IP2" > /dev/null \
+echo "[setup] Verifying overlay reachability (small ping, payload 40B)..."
+ip netns exec "$NS1" ping -c 1 -W 2 -s 40 "$OVERLAY_IP2" > /dev/null \
     && echo "[setup] overlay ping (small): OK" \
     || echo "[setup] WARNING: overlay small ping failed"
 
@@ -107,17 +133,20 @@ if ! kill -0 "$HTTP_PID" 2>/dev/null; then
     echo "[setup] WARNING: HTTP server failed to start. Check /tmp/vxlan-lab-http.log"
 fi
 
+SAFE_MTU=$((REDUCED_UNDERLAY_MTU - 50))
 echo ""
 echo "Lab topology ready:"
-echo "  ns1: vxlan0=$OVERLAY_IP1/24  veth1=$UNDERLAY_IP1/24  (vxlan0 MTU=$WRONG_MTU — intentionally wrong)"
-echo "  ns2: vxlan0=$OVERLAY_IP2/24  veth2=$UNDERLAY_IP2/24  (vxlan0 MTU=$WRONG_MTU)"
-echo "  VNI=$VNI  port=$VXLAN_PORT  underlay_MTU=$UNDERLAY_MTU"
+echo "  ns1: vxlan0=$OVERLAY_IP1/24 (MTU=$VXLAN_MTU stale)  veth1=$UNDERLAY_IP1/24 (MTU=$REDUCED_UNDERLAY_MTU)"
+echo "  ns2: vxlan0=$OVERLAY_IP2/24 (MTU=$VXLAN_MTU stale)  veth2=$UNDERLAY_IP2/24 (MTU=$REDUCED_UNDERLAY_MTU)"
+echo "  VNI=$VNI  port=$VXLAN_PORT"
+echo ""
+echo "MTU arithmetic:"
+echo "  underlay MTU:     $REDUCED_UNDERLAY_MTU"
+echo "  VXLAN overhead:   50 bytes (inner ETH 14 + outer IP 20 + outer UDP 8 + VXLAN hdr 8)"
+echo "  max safe inner IP: $SAFE_MTU (underlay $REDUCED_UNDERLAY_MTU - 50)"
+echo "  vxlan0 MTU stale: $VXLAN_MTU (was correct for underlay $INITIAL_UNDERLAY_MTU; now too high)"
+echo "  blackhole zone:   inner IP > $SAFE_MTU → outer IP > $REDUCED_UNDERLAY_MTU → ip_do_fragment"
 echo ""
 echo "Run smoke tests:"
-echo "  make smoke-small"
-echo "  make smoke-large"
-echo ""
-echo "Correct vxlan0 MTU: $((UNDERLAY_MTU - 50))"
-echo "For TCP MSS=1460 with wrong MTU:"
-echo "  inner IP = 1500, outer IP = $((1500 + 50)) bytes (excess $((1500 + 50 - UNDERLAY_MTU)) over underlay MTU $UNDERLAY_MTU)"
-echo "  wire frame on the wire = $((1500 + 64)) bytes (outer ETH 14 + outer IP 1550; informational only)"
+echo "  make smoke-small   (payload 40B: inner IP 68B, outer IP 118B, safe)"
+echo "  make smoke-large   (payload 1360B: inner IP 1388B, outer IP 1438B > $REDUCED_UNDERLAY_MTU → fragment)"
