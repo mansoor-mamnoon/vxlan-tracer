@@ -125,6 +125,47 @@ sudo bpftrace spikes/bpftrace/ptb_suppression.bt
 ip netns exec ns1 iptables -D INPUT -p icmp --icmp-type fragmentation-needed -j DROP
 ```
 
+## Synthetic PTB injection (spikes/inject_ptb.py)
+
+Used to test PTB suppression detection without a real remote router.
+Requires scapy (`pip3 install scapy`) and root / CAP_NET_RAW.
+
+```sh
+# Lab must be up with df=set on vxlan0 and iptables DROP rule in ns1
+
+# Step 1: reconfigure vxlan0 with df set (outer packets get DF=1)
+ip netns exec ns1 ip link del vxlan0
+ip netns exec ns1 ip link add vxlan0 type vxlan id 42 \
+    remote 192.168.100.2 local 192.168.100.1 dstport 4789 dev veth1 df set
+ip netns exec ns1 ip addr add 10.244.0.1/24 dev vxlan0
+ip netns exec ns1 ip link set vxlan0 up
+
+# Step 2: add PTB suppression rule (models cloud security group or ops error)
+ip netns exec ns1 iptables -A INPUT -p icmp --icmp-type fragmentation-needed -j DROP
+
+# Step 3: from ns2, inject synthetic PTB toward ns1
+ip netns exec ns2 python3 spikes/inject_ptb.py \
+    --src 192.168.100.2 \
+    --dst 192.168.100.1 \
+    --dev veth2 \
+    --next-hop-mtu 1400 \
+    --count 5
+
+# Step 4: check iptables counter (should show 5 packets DROPped)
+ip netns exec ns1 iptables -L INPUT -n -v | grep icmp
+
+# Step 5: with TC ingress BPF on veth1 (not yet implemented):
+#   TC ingress count == 5, icmp_rcv count == 0 → suppression detected
+
+# Step 6: clean up suppression rule
+ip netns exec ns1 iptables -D INPUT -p icmp --icmp-type fragmentation-needed -j DROP
+```
+
+**Expected iptables output after Step 4:**
+```
+  5    XXX DROP  icmp -- *  *  0.0.0.0/0  0.0.0.0/0  icmptype 3 code 4
+```
+
 ## Lab teardown
 
 ```sh
