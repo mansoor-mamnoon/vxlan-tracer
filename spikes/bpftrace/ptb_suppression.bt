@@ -1,0 +1,140 @@
+#!/usr/bin/env bpftrace
+/*
+ * spikes/bpftrace/ptb_suppression.bt
+ *
+ * SPIKE PROBE — not production code.
+ *
+ * Detects ICMP PTB suppression by firewalls (iptables / nftables).
+ *
+ * Uses two concurrent probes to measure PTBs at two points in the receive path:
+ *
+ *   HOOK A: tracepoint:net:netif_receive_skb
+ *           Fires before netfilter (before iptables INPUT).
+ *           Approximates what TC ingress would see.
+ *           NOTE: This is a tracepoint proxy, not the actual TC ingress hook.
+ *           The production tool uses TC BPF at TC_H_MIN_INGRESS for exact timing.
+ *
+ *   HOOK B: kprobe:icmp_rcv
+ *           Fires after netfilter INPUT.
+ *           If iptables drops PTBs, icmp_rcv is never called.
+ *
+ * SUPPRESSION DETECTION:
+ *   If @pre_netfilter_ptb > 0 AND @post_netfilter_ptb == 0:
+ *   → PTBs are being dropped by iptables/nftables before the kernel processes them.
+ *   → TCP never receives PMTU update → connection stalls permanently.
+ *
+ * PREREQUISITES:
+ *   - Linux 5.15+ with bpftrace 0.16+
+ *   - Root / CAP_BPF
+ *   - vxlan0 must have 'df set' (so PTBs are generated, not fragments)
+ *   - To test suppression: iptables -A INPUT -p icmp --icmp-type fragmentation-needed -j DROP
+ *   - To inject remote PTBs: use scapy in ns2 (see evidence/commands.md)
+ *
+ * USAGE:
+ *   Terminal 1: sudo bpftrace spikes/bpftrace/ptb_suppression.bt
+ *   Terminal 2: python3 spikes/inject_ptb.py  (when available)
+ *
+ * CAVEATS:
+ *   - netif_receive_skb tracepoint is an approximation of TC ingress timing.
+ *     The exact position differs from TC BPF (cls_bpf at TC_H_MIN_INGRESS).
+ *     For the final tool, TC BPF is the correct hook.
+ *   - icmp_rcv reads skb->data as a raw pointer; struct access may need
+ *     adjustment on different kernel versions.
+ *   - ICMP rate limiting affects how many PTBs are generated in the first place.
+ */
+
+#include <linux/skbuff.h>
+#include <linux/ip.h>
+#include <linux/icmp.h>
+
+BEGIN {
+    printf("PTB suppression probe active.\n");
+    printf("Requires: vxlan0 with 'df set' + wrong MTU + large traffic.\n");
+    printf("To test suppression: iptables -A INPUT -p icmp --icmp-type fragmentation-needed -j DROP\n");
+    printf("Ctrl-C to stop.\n\n");
+
+    @pre_netfilter_ptb  = 0;
+    @post_netfilter_ptb = 0;
+}
+
+/*
+ * HOOK A: Pre-netfilter PTB count (approximate)
+ *
+ * netif_receive_skb fires after GRO and before TC ingress / netfilter.
+ * Reads the raw skb to find ICMP type=3 code=4 packets.
+ * This is a coarser hook than TC BPF — use it only for spike validation.
+ */
+tracepoint:net:netif_receive_skb
+{
+    // args->skbaddr is the sk_buff pointer
+    $skb  = (struct sk_buff *)args->skbaddr;
+    $iph  = (struct iphdr *)($skb->head + $skb->network_header);
+
+    if ($iph->protocol == 1) {  // IPPROTO_ICMP = 1
+        $ihl    = (uint32)($iph->ihl & 0x0f) * 4;
+        $icmph  = (struct icmphdr *)($skb->head + $skb->network_header + $ihl);
+
+        if ($icmph->type == 3 && $icmph->code == 4) {
+            // next_hop_mtu is in bytes 6-7 of the ICMP header (un.frag.mtu)
+            $mtu = bswap((uint16)$icmph->un.frag.__unused);
+            printf("[HOOK-A pre-netfilter] ICMP PTB arrived: src=%s next_hop_mtu=%d\n",
+                   ntop($iph->saddr), $mtu);
+            @pre_netfilter_ptb++;
+        }
+    }
+}
+
+/*
+ * HOOK B: Post-netfilter PTB count
+ *
+ * icmp_rcv fires after netfilter INPUT chain completes.
+ * If iptables drops the PTB, icmp_rcv is never called.
+ *
+ * icmp_rcv signature: int icmp_rcv(struct sk_buff *skb)
+ *   arg0 = struct sk_buff *
+ */
+kprobe:icmp_rcv
+{
+    $skb   = (struct sk_buff *)arg0;
+    $icmph = (struct icmphdr *)$skb->data;
+
+    if ($icmph->type == 3 && $icmph->code == 4) {
+        printf("[HOOK-B post-netfilter] icmp_rcv: type=3 code=4 (PTB survived iptables)\n");
+        @post_netfilter_ptb++;
+    }
+}
+
+interval:s:5
+{
+    printf("\n--- 5s snapshot ---\n");
+    printf("  PTBs at netif_receive_skb (pre-netfilter, Hook A) : %d\n",  @pre_netfilter_ptb);
+    printf("  PTBs at icmp_rcv          (post-netfilter, Hook B) : %d\n", @post_netfilter_ptb);
+
+    if (@pre_netfilter_ptb > 0 && @post_netfilter_ptb == 0) {
+        printf("\n  *** PTB SUPPRESSION DETECTED ***\n");
+        printf("  %d PTBs arrived at NIC but 0 reached icmp_rcv.\n", @pre_netfilter_ptb);
+        printf("  iptables/nftables INPUT is dropping ICMP fragmentation-needed.\n");
+        printf("  TCP flows to affected VTEPs cannot receive PMTU updates.\n");
+        printf("  Fix: iptables -D INPUT -p icmp --icmp-type fragmentation-needed -j DROP\n");
+    } else if (@pre_netfilter_ptb > 0 && @post_netfilter_ptb == @pre_netfilter_ptb) {
+        printf("  PTB flow: Hook A = Hook B — no suppression.\n");
+    } else if (@pre_netfilter_ptb == 0) {
+        printf("  No PTBs observed. Is df=set configured? Is large traffic running?\n");
+    }
+    printf("\n");
+}
+
+END {
+    printf("\n--- final summary ---\n");
+    printf("  Hook A (pre-netfilter)  : %d PTBs\n", @pre_netfilter_ptb);
+    printf("  Hook B (post-netfilter) : %d PTBs\n", @post_netfilter_ptb);
+
+    if (@pre_netfilter_ptb > 0 && @post_netfilter_ptb == 0) {
+        printf("  VERDICT: PTB SUPPRESSION CONFIRMED\n");
+    } else if (@pre_netfilter_ptb == 0) {
+        printf("  VERDICT: No PTBs in flight — cannot determine suppression state.\n");
+        printf("           Use ip_do_fragment.bt to check for DF=0 fragmentation.\n");
+    } else {
+        printf("  VERDICT: No suppression detected (both hooks match).\n");
+    }
+}

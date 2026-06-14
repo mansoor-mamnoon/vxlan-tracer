@@ -1,0 +1,100 @@
+#!/usr/bin/env bpftrace
+/*
+ * spikes/bpftrace/icmp_send.bt
+ *
+ * SPIKE PROBE — not production code.
+ *
+ * Detects locally-generated ICMP Type 3 Code 4 (Packet Too Big /
+ * fragmentation-needed) messages via kprobe on icmp_send.
+ *
+ * This fires when the kernel decides to DROP an oversized outer IP packet
+ * (DF=1 on outer IP) and generates a PTB back to the sender. This path is
+ * only active when `df set` is configured on the VXLAN interface:
+ *
+ *   ip link add vxlan0 ... df set
+ *
+ * Default Linux VXLAN uses DF=0 and fragments instead. For the default DF=0
+ * case, use ip_do_fragment.bt instead. This probe is complementary.
+ *
+ * PREREQUISITES:
+ *   - Linux 5.15+ with bpftrace 0.16+
+ *   - Root / CAP_BPF
+ *   - vxlan0 must be configured with 'df set' for this probe to fire
+ *   - Verify: ip -d link show vxlan0 | grep df
+ *
+ * USAGE:
+ *   sudo bpftrace spikes/bpftrace/icmp_send.bt
+ *
+ * EXPECTED OUTPUT when df=set + wrong MTU + large traffic:
+ *   [icmp_send] PTB: type=3 code=4 next_hop_mtu=1450 saddr=192.168.100.1
+ *   ...
+ *
+ * icmp_send kernel signature (5.15):
+ *   void icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info)
+ *   arg0 = struct sk_buff *skb_in  (the oversized outer packet being dropped)
+ *   arg1 = int type
+ *   arg2 = int code
+ *   arg3 = __be32 info            (for type=3/code=4: next-hop MTU)
+ *
+ * NOTE: icmp_send is subject to ICMP rate limiting. Under sustained high
+ * traffic, not all oversized packets will produce a PTB. The rate-limiting
+ * is controlled by /proc/sys/net/ipv4/icmp_ratemask.
+ */
+
+#include <linux/skbuff.h>
+#include <linux/ip.h>
+#include <netinet/in.h>
+
+BEGIN {
+    printf("icmp_send probe active. Listening for locally-generated PTBs.\n");
+    printf("NOTE: requires 'df set' on vxlan0 interface for PTBs to be generated.\n");
+    printf("Ctrl-C to stop.\n\n");
+    @ptb_count = 0;
+}
+
+kprobe:icmp_send
+{
+    $type = (int32)arg1;
+    $code = (int32)arg2;
+
+    // Only care about fragmentation-needed (Type 3 Code 4)
+    if ($type == 3 && $code == 4) {
+        $skb  = (struct sk_buff *)arg0;
+        $info = (uint32)arg3;  // next_hop_mtu for type=3/code=4
+
+        // Read the outer IP header from the oversized packet
+        $iph = (struct iphdr *)($skb->head + $skb->network_header);
+        $saddr = $iph->saddr;
+        $daddr = $iph->daddr;
+        $proto = $iph->protocol;
+
+        printf("[icmp_send] PTB: type=%d code=%d next_hop_mtu=%d saddr=%s daddr=%s proto=%d\n",
+               $type, $code, $info,
+               ntop($saddr), ntop($daddr), $proto);
+
+        @ptb_count++;
+        @ptb_per_mtu[$info] = count();
+    }
+}
+
+interval:s:10
+{
+    printf("\n--- 10s summary ---\n");
+    printf("  locally-generated PTBs (type=3 code=4): %d\n", @ptb_count);
+    if (@ptb_count > 0) {
+        printf("  PTBs by next_hop_mtu value:\n");
+        print(@ptb_per_mtu);
+    } else {
+        printf("  No PTBs generated. If expecting PTBs:\n");
+        printf("    - Does vxlan0 have 'df set'? (ip -d link show vxlan0 | grep df)\n");
+        printf("    - Is traffic being sent? (make smoke-large)\n");
+        printf("    - Is vxlan0 MTU wrong? (should be > 1450 to trigger PTBs)\n");
+    }
+    printf("\n");
+}
+
+END {
+    printf("\n--- final summary ---\n");
+    printf("  total locally-generated PTBs: %d\n", @ptb_count);
+    clear(@ptb_per_mtu);
+}

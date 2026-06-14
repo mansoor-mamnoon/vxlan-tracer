@@ -1,0 +1,96 @@
+#!/usr/bin/env bpftrace
+/*
+ * spikes/bpftrace/ip_do_fragment.bt
+ *
+ * SPIKE PROBE — not production code.
+ *
+ * Detects outer VXLAN packet fragmentation via kprobe on ip_do_fragment.
+ * This is the primary detection signal for default Linux VXLAN deployments
+ * where DF=0 is set on the outer IP header (the Linux default).
+ *
+ * In this configuration, oversized outer packets are fragmented (not dropped)
+ * and no ICMP PTB is generated. ip_do_fragment is called exactly once per
+ * original oversized outer packet.
+ *
+ * PREREQUISITES:
+ *   - Linux 5.15+ with bpftrace 0.16+
+ *   - Root / CAP_BPF
+ *   - ip_do_fragment must appear in /proc/kallsyms:
+ *       grep ip_do_fragment /proc/kallsyms
+ *   - Run AFTER setup-netns.sh
+ *
+ * USAGE:
+ *   sudo bpftrace spikes/bpftrace/ip_do_fragment.bt
+ *   (then run make smoke-large in another terminal)
+ *
+ * EXPECTED OUTPUT when large traffic crosses vxlan0 with wrong MTU:
+ *   [ip_do_fragment] outer_len=1564 dev=veth1 dev_mtu=1500 excess=64
+ *   [ip_do_fragment] outer_len=1564 dev=veth1 dev_mtu=1500 excess=64
+ *   ... (one line per original oversized outer packet)
+ *
+ * EXPECTED OUTPUT for correctly-sized traffic:
+ *   (no output — packets fit within MTU, ip_do_fragment not called)
+ *
+ * ip_do_fragment kernel signature (5.15):
+ *   int ip_do_fragment(struct net *net, struct sock *sk,
+ *                      struct sk_buff *skb, dst_output_fn output)
+ *   arg0 = struct net *
+ *   arg1 = struct sock *
+ *   arg2 = struct sk_buff *
+ *   arg3 = output function pointer
+ *
+ * If this probe produces no output and you expected fragmentation events,
+ * verify the symbol:
+ *   grep ip_do_fragment /proc/kallsyms
+ * If absent, ip_do_fragment is inlined. Fall back to __ip_finish_output kprobe.
+ */
+
+#include <linux/skbuff.h>
+#include <linux/netdevice.h>
+
+BEGIN {
+    printf("ip_do_fragment probe active. Run 'make smoke-large' in another terminal.\n");
+    printf("Ctrl-C to stop.\n\n");
+    @frag_count = 0;
+}
+
+kprobe:ip_do_fragment
+{
+    $skb = (struct sk_buff *)arg2;
+    $dev = $skb->dev;
+
+    $skb_len = $skb->len;
+    $dev_mtu = $dev->mtu;
+    $dev_name = str($dev->name);
+
+    // Only report packets larger than 1400 to filter noise
+    if ($skb_len > 1400) {
+        $excess = (int32)$skb_len - (int32)$dev_mtu;
+        printf("[ip_do_fragment] outer_len=%d dev=%s dev_mtu=%d excess=%d\n",
+               $skb_len, $dev_name, $dev_mtu, $excess);
+        @frag_count++;
+        @per_device[$dev_name] = count();
+    }
+}
+
+interval:s:10
+{
+    printf("\n--- 10s summary ---\n");
+    printf("  total fragmentation events (outer_len > 1400): %d\n", @frag_count);
+    print(@per_device);
+    printf("\n");
+}
+
+END {
+    printf("\n--- final summary ---\n");
+    printf("  total fragmentation events: %d\n", @frag_count);
+    if (@frag_count == 0) {
+        printf("  NOTE: no ip_do_fragment events observed.\n");
+        printf("  Possible causes:\n");
+        printf("    1. No oversized packets generated (run 'make smoke-large')\n");
+        printf("    2. ip_do_fragment symbol absent (inlined): grep ip_do_fragment /proc/kallsyms\n");
+        printf("    3. vxlan0 MTU is already correct (1450)\n");
+        printf("    4. DF=1 configured on vxlan0 (ip_finish_output drops instead)\n");
+    }
+    clear(@per_device);
+}
