@@ -48,8 +48,7 @@ lint:
 	golangci-lint run ./... 2>/dev/null || echo "golangci-lint not installed; skipping"
 
 # --- BPF objects (Linux only) ---
-# kprobes.bpf.c is not yet implemented; excluded until Day 4.
-bpf: bpf-check bpf/tc_ingress_eth0.bpf.o bpf/tc_egress_vxlan0.bpf.o
+bpf: bpf-check bpf/tc_ingress_eth0.bpf.o bpf/tc_egress_vxlan0.bpf.o bpf/kprobes.bpf.o
 	@echo "BPF build complete."
 	@ls -lh bpf/*.bpf.o
 
@@ -58,6 +57,11 @@ bpf/tc_ingress_eth0.bpf.o: bpf/tc_ingress_eth0.bpf.c bpf/maps.h
 	$(CLANG) $(CFLAGS_BPF) -c $< -o $@
 
 bpf/tc_egress_vxlan0.bpf.o: bpf/tc_egress_vxlan0.bpf.c bpf/maps.h
+	@echo "  CC  $@"
+	$(CLANG) $(CFLAGS_BPF) -c $< -o $@
+
+# kprobes.bpf.c uses kprobe section; attached via probe_attach.c (not tc filter)
+bpf/kprobes.bpf.o: bpf/kprobes.bpf.c
 	@echo "  CC  $@"
 	$(CLANG) $(CFLAGS_BPF) -c $< -o $@
 
