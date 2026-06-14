@@ -1,97 +1,63 @@
 /* bpf/maps.h
  *
- * BPF map type definitions shared across all vxlan-tracer BPF programs.
- * Included by tc_egress_vxlan0.bpf.c, tc_ingress_eth0.bpf.c, kprobes.bpf.c.
+ * Shared struct definitions for vxlan-tracer BPF programs.
+ * This header defines keys and values only — no map instances.
+ * Each BPF C file declares its own maps using these types.
  *
- * NOT YET USED — included here to define the schema before implementation.
+ * Correlation note: ICMP PTB payloads carry the original outer IP header and
+ * the first 8 bytes of the original outer UDP header.  The inner IP header
+ * is NOT present in the PTB payload.  Therefore PTB-to-flow correlation is
+ * at VTEP IP pair granularity, not at inner 5-tuple granularity.
+ * See docs/forbidden-claims.md, claim #4.
  */
 #pragma once
 
-#include <linux/bpf.h>
-#include <bpf/bpf_helpers.h>
+#include <linux/types.h>
 
-/* ---- Key and value structs ---- */
+/* ---- PTB ingress key/value ---- */
 
-struct flow_key {
-    __u32 src_ip;
-    __u32 dst_ip;
-    __u16 src_port;
-    __u16 dst_port;
-    __u8  proto;
-    __u8  pad[3];   /* align to 4 bytes */
-};
-
-struct flow_val {
-    __u64 last_seen_ns;
-    __u16 max_pkt_size;   /* inner IP packet size at TC egress vxlan0 */
-    __u16 pad;
-    __u32 remote_vtep;    /* 0 in v0; populated via bpf_fib_lookup in v1 */
-    __u32 vni;            /* 0 in v0; populated via config map in v1 */
-    __u32 _reserved;
-};
-
+/* Key: the underlay IP pair that exchanged a PTB.
+ * ptb_src_ip: source of the PTB (remote router or middlebox sending the error).
+ * ptb_dst_ip: destination of the PTB (our underlay interface receiving the error).
+ */
 struct ptb_key {
-    __u32 ptb_src_ip;   /* IP sending the PTB (remote router or VTEP) */
-    __u32 ptb_dst_ip;   /* our underlay IP receiving the PTB */
+	__u32 ptb_src_ip;
+	__u32 ptb_dst_ip;
 };
 
+/* Value: per-VTEP-pair PTB counters seen before netfilter (TC ingress). */
 struct ptb_val {
-    __u64 first_seen_ns;
-    __u16 next_hop_mtu;
-    __u16 pad;
-    __u32 ptb_count;
+	__u64 first_seen_ns;  /* bpf_ktime_get_ns() at first PTB */
+	__u64 last_seen_ns;   /* bpf_ktime_get_ns() at most recent PTB */
+	__u32 ptb_count;      /* total PTBs seen for this VTEP pair */
+	__u16 next_hop_mtu;   /* MTU advertised in the most recent PTB */
+	__u16 pad;
 };
 
-struct frag_key {
-    __u32 vtep_ip;   /* outer IP destination (remote VTEP) */
+/* ---- Overlay flow key/value (TC egress vxlan0) ---- */
+
+/* Key: inner 5-tuple as seen at vxlan0 egress (before VXLAN encapsulation).
+ * src_port / dst_port are 0 for ICMP.
+ */
+struct flow_key {
+	__u32 src_ip;
+	__u32 dst_ip;
+	__u16 src_port;
+	__u16 dst_port;
+	__u8  proto;
+	__u8  pad[3];
 };
 
-struct frag_val {
-    __u64 first_seen_ns;
-    __u32 frag_count;
-    __u16 orig_outer_len;  /* outer skb->len at ip_do_fragment entry */
-    __u16 dev_mtu;         /* dev->mtu that triggered fragmentation */
+/* Value: per-flow packet observations.
+ * max_inner_ip_len: largest inner IP packet seen (iph->tot_len).
+ * max_outer_ip_len: max_inner_ip_len + 50 (VXLAN overhead; informational).
+ *   The kernel compares this value against the underlay MTU.
+ *   If max_outer_ip_len > underlay_mtu: ip_do_fragment fires (DF=0)
+ *   or outer packet is dropped + PTB generated (DF=1).
+ */
+struct flow_val {
+	__u64 last_seen_ns;
+	__u32 pkt_count;
+	__u16 max_inner_ip_len;
+	__u16 max_outer_ip_len;  /* = max_inner_ip_len + 50 */
 };
-
-struct config_val {
-    __u16 vxlan_port;       /* default 4789 */
-    __u16 underlay_ifindex;
-    __u32 _reserved;
-};
-
-/* ---- Map declarations ---- */
-
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 65536);
-    __type(key, struct flow_key);
-    __type(value, struct flow_val);
-} flow_state SEC(".maps");
-
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 1024);
-    __type(key, struct ptb_key);
-    __type(value, struct ptb_val);
-} ptb_events SEC(".maps");
-
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
-    __type(key, __u32);
-    __type(value, __u64);
-} ptb_processed SEC(".maps");
-
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 1024);
-    __type(key, struct frag_key);
-    __type(value, struct frag_val);
-} frag_events SEC(".maps");
-
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
-    __type(key, __u32);
-    __type(value, struct config_val);
-} config SEC(".maps");
