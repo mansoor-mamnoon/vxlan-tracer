@@ -18,22 +18,30 @@ MTU: 1500                           MTU: 1500
 
 ## VXLAN overhead math
 
-```
-outer ETH  = 14 bytes
-outer IP   = 20 bytes
-outer UDP  =  8 bytes
-VXLAN hdr  =  8 bytes
-           ─────────
-overhead   = 50 bytes
+The kernel's MTU check operates at the **IP layer**: it compares the outer IP
+packet length against the underlay interface MTU (1500). The outer Ethernet
+header (14 bytes) is NOT part of this comparison.
 
-inner IP   = 1500 bytes (MSS=1460, TCP at full size)
-outer frame = 1500 + 14 + 50 = 1564 bytes
-veth1 MTU   = 1500 bytes
-excess      = 1564 - 1500 = 64 bytes  ← causes fragmentation or drop
+```
+IP-layer overhead (inner IP → outer IP):
+  inner ETH  = 14 bytes  (VXLAN carries the full inner Ethernet frame)
+  outer IP   = 20 bytes
+  outer UDP  =  8 bytes
+  VXLAN hdr  =  8 bytes
+              ─────────
+              50 bytes
+
+For inner IP = 1500 bytes (TCP MSS=1460):
+  outer IP packet = 1500 + 50 = 1550 bytes
+  veth1 MTU       = 1500 bytes
+  IP-layer excess = 1550 - 1500 = 50 bytes  ← kernel triggers fragment/drop here
+
+  wire frame on wire = 14 (outer ETH) + 1550 = 1564 bytes  (informational only)
 ```
 
 The intentional wrong MTU (1500 on vxlan0) triggers the VXLAN blackhole
-scenario. The correct MTU would be 1450 (= 1500 − 50).
+scenario. The correct MTU would be 1450 (= 1500 − 50), which keeps the outer
+IP packet at exactly 1500 bytes (1450 + 50 = 1500).
 
 ## Key parameters
 
@@ -75,13 +83,13 @@ make smoke-large    # large file transfer — expected: stall or partial transfe
 After `lab-up`:
 
 - `ip netns exec ns1 ping -c 3 -s 56 10.244.0.2` — should succeed (56-byte
-  ICMP payload → inner IP 84 bytes → outer frame 148 bytes, well under 1500)
+  ICMP payload → inner IP 84 bytes → outer IP 134 bytes, well under 1500)
 - `ip netns exec ns1 ping -c 3 -s 1400 10.244.0.2` — may succeed (inner IP
-  1428 bytes → outer frame 1492 bytes, still under 1500)
-- `ip netns exec ns1 ping -c 3 -s 1452 10.244.0.2` — should fail or fragment
-  (inner IP 1480 bytes → outer frame 1544 bytes, 44 bytes over 1500)
+  1428 bytes → outer IP 1478 bytes, still under 1500)
+- `ip netns exec ns1 ping -c 3 -s 1452 10.244.0.2` — should fragment or fail
+  (inner IP 1480 bytes → outer IP 1530 bytes, 30 bytes over underlay MTU 1500)
 - `ip netns exec ns1 curl http://10.244.0.2/large.bin` — expected to stall
-  after ~8KB (TCP MSS 1460 → inner IP 1500 → outer 1564, fragmented or dropped)
+  after ~8KB (TCP MSS 1460 → inner IP 1500 → outer IP 1550, 50 bytes over MTU)
 
 **Note on local netns topologies:** In this two-namespace veth setup, DF=0
 outer fragments may actually reassemble successfully in ns2 (there is no

@@ -97,7 +97,9 @@ sudo bpftrace spikes/bpftrace/ip_do_fragment.bt
 ip netns exec ns1 curl --max-time 30 http://10.244.0.2/large.bin -o /dev/null
 
 # Expected output in Terminal 1:
-# [ip_do_fragment] outer_len=1564 dev=veth1 dev_mtu=1500 excess=64
+# [ip_do_fragment] outer_ip_len=1550 dev=veth1 dev_mtu=1500 ip_excess=50
+# (outer_ip_len is the outer IP packet length; 50 bytes over underlay MTU 1500)
+# (wire frame would be 1564 bytes but kernel compares outer IP 1550 vs MTU)
 ```
 
 ```sh
@@ -139,9 +141,21 @@ go vet ./...
 
 ## MTU arithmetic manual verification
 
+The kernel MTU check is at the IP layer. Outer Ethernet header (14 bytes) is
+NOT included in the MTU comparison.
+
 ```
-VXLAN overhead = 14 + 20 + 8 + 8 = 50 bytes
-Safe vxlan0 MTU = 1500 - 50 = 1450
-TCP MSS at vxlan0 MTU 1450 → inner IP 1450B → outer frame = 1450 + 14 + 50 = 1514B ≤ 1500 (fits)
-TCP MSS at vxlan0 MTU 1500 → inner IP 1500B → outer frame = 1500 + 14 + 50 = 1564B > 1500 (fails)
+IP-layer overhead = inner ETH(14) + outer IP hdr(20) + outer UDP(8) + VXLAN hdr(8) = 50 bytes
+Safe vxlan0 MTU   = underlay MTU - 50 = 1500 - 50 = 1450
+
+TCP MSS at vxlan0 MTU 1450 (correct):
+  inner IP = 1450 bytes
+  outer IP = 1450 + 50 = 1500 bytes ← equals underlay MTU, no fragmentation
+  wire frame = 1500 + 14 = 1514 bytes (outer ETH + outer IP; informational)
+
+TCP MSS at vxlan0 MTU 1500 (wrong, the default Flannel misconfiguration):
+  inner IP = 1500 bytes
+  outer IP = 1500 + 50 = 1550 bytes ← 50 bytes OVER underlay MTU 1500
+  wire frame = 1550 + 14 = 1564 bytes (informational; NOT what kernel checks)
+  → ip_do_fragment fires (DF=0) or outer packet dropped + PTB (DF=1)
 ```

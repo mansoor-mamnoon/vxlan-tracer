@@ -40,8 +40,10 @@ This is documented accurately. No Linux-specific results were fabricated.
 ## What was proven today
 
 1. **Go MTU arithmetic is correct.** `go test ./internal/diag/ -v` passes 6
-   subtests. The math is verified: vxlan0 1500 + 50 overhead → outer frame 1564
-   → 64 bytes excess over underlay 1500.
+   subtests (after Day 2 arithmetic correction). The correct math:
+   inner IP 1500 + 50 overhead = outer IP 1550 → 50 bytes excess over underlay MTU 1500.
+   Wire frame is 1564 bytes (outer ETH 14 + outer IP 1550) but the kernel MTU
+   comparison is at the IP layer (1550 vs 1500), not the wire frame level.
 
 2. **Shell scripts are syntactically correct.** `bash -n` on all four scripts
    returns 0.

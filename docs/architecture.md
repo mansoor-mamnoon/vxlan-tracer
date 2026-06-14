@@ -2,20 +2,35 @@
 
 ## Problem statement
 
-VXLAN encapsulation adds 50 bytes of overhead:
+VXLAN encapsulation adds overhead at the IP layer (what the kernel's MTU
+comparison uses) and at the wire frame level (informational):
 
 ```
-outer Ethernet header : 14 bytes
-outer IP header       : 20 bytes
-outer UDP header      :  8 bytes
-VXLAN header          :  8 bytes
-                        --------
-total overhead        : 50 bytes
+IP-layer overhead (outer IP packet - inner IP packet):
+  inner ETH header  : 14 bytes  (VXLAN carries the full inner Ethernet frame)
+  outer IP header   : 20 bytes
+  outer UDP header  :  8 bytes
+  VXLAN header      :  8 bytes
+                      --------
+                      50 bytes  ← kernel compares (inner IP + 50) vs underlay MTU
+
+Wire frame overhead (includes outer Ethernet header, NOT part of MTU check):
+  outer ETH header  : 14 bytes
+  IP-layer overhead : 50 bytes
+                      --------
+                      64 bytes total over inner IP on the wire
 ```
 
-If the overlay interface MTU is set to 1500 (matching the underlay), an inner
-IP packet of 1500 bytes becomes an outer frame of 1564 bytes — 64 bytes over
-the typical underlay MTU of 1500. The safe overlay MTU is:
+The kernel MTU comparison operates at the **IP layer**. It compares the outer
+IP packet length against the underlay interface MTU. The outer Ethernet header
+(14 bytes) is NOT included in this comparison.
+
+If the overlay interface MTU is left at 1500 (matching the underlay), an inner
+IP packet of 1500 bytes produces:
+- outer IP packet = 1500 + 50 = **1550 bytes** → **50 bytes over** underlay MTU 1500
+- wire frame on the wire = 1550 + 14 = 1564 bytes (informational)
+
+The safe overlay MTU is:
 
 ```
 vxlan0_MTU = underlay_MTU − 50
@@ -121,10 +136,17 @@ ptb_events totals against ptb_processed, and emits a structured diagnosis.
 
 MTU arithmetic is computed by the controller, not in BPF:
 ```
-safe_vxlan_mtu   = underlay_mtu - 50
-projected_outer  = inner_ip_len + 64   (inner_ip_len + overhead without outer ETH)
-projected_frame  = inner_ip_len + 14 + 50   (with outer ETH)
-excess           = projected_frame - underlay_mtu
+safe_vxlan_mtu      = underlay_mtu - 50       (max inner IP that keeps outer IP within MTU)
+projected_outer_ip  = inner_ip_len + 50       (outer IP packet length; kernel compares this vs MTU)
+projected_wire_frame = inner_ip_len + 64      (wire frame = outer IP + outer ETH; informational only)
+excess              = projected_outer_ip - underlay_mtu   (0 if safe; positive if misconfigured)
+```
+
+Example for inner IP = 1500, underlay MTU = 1500:
+```
+projected_outer_ip  = 1500 + 50 = 1550   (50 bytes over underlay MTU 1500)
+projected_wire_frame = 1500 + 64 = 1564  (informational; NOT what kernel checks vs MTU)
+excess              = 1550 - 1500 = 50
 ```
 
 The `inner_ip_len` field in BPF is the actual `skb->len` at TC egress on

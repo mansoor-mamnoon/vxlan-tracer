@@ -24,8 +24,11 @@
  *   (then run make smoke-large in another terminal)
  *
  * EXPECTED OUTPUT when large traffic crosses vxlan0 with wrong MTU:
- *   [ip_do_fragment] outer_len=1564 dev=veth1 dev_mtu=1500 excess=64
- *   [ip_do_fragment] outer_len=1564 dev=veth1 dev_mtu=1500 excess=64
+ *   [ip_do_fragment] outer_len=1550 dev=veth1 dev_mtu=1500 excess=50
+ *
+ * NOTE on outer_len: skb->len at ip_do_fragment is the outer IP packet length,
+ * NOT the wire frame length. Kernel MTU comparison: outer IP (1550) vs MTU (1500).
+ * The outer Ethernet header (14 bytes, making wire frame 1564) is not counted.
  *   ... (one line per original oversized outer packet)
  *
  * EXPECTED OUTPUT for correctly-sized traffic:
@@ -63,10 +66,12 @@ kprobe:ip_do_fragment
     $dev_mtu = $dev->mtu;
     $dev_name = str($dev->name);
 
-    // Only report packets larger than 1400 to filter noise
+    // Only report packets larger than 1400 to filter noise.
+    // $skb_len is the outer IP packet length (not the wire frame).
+    // MTU comparison: outer IP vs dev->mtu. Excess = outer IP - MTU.
     if ($skb_len > 1400) {
         $excess = (int32)$skb_len - (int32)$dev_mtu;
-        printf("[ip_do_fragment] outer_len=%d dev=%s dev_mtu=%d excess=%d\n",
+        printf("[ip_do_fragment] outer_ip_len=%d dev=%s dev_mtu=%d ip_excess=%d\n",
                $skb_len, $dev_name, $dev_mtu, $excess);
         @frag_count++;
         @per_device[$dev_name] = count();

@@ -11,8 +11,9 @@ An eBPF-based diagnostic tool for VXLAN MTU blackholes.
 In Kubernetes and other VXLAN-based overlay networks, VXLAN encapsulation adds
 50 bytes of overhead to every packet (outer ETH 14 + IP 20 + UDP 8 + VXLAN
 header 8). If the overlay interface MTU is left at 1500 (same as the underlay),
-inner packets up to 1500 bytes produce outer frames up to 1564 bytes — 64 bytes
-over the typical underlay MTU of 1500.
+inner IP packets up to 1500 bytes produce outer IP packets up to 1550 bytes —
+50 bytes over the typical underlay IP MTU of 1500 (the wire frame is 1564 bytes
+including the outer Ethernet header, but the kernel MTU check is at the IP layer).
 
 The result is a silent blackhole:
 

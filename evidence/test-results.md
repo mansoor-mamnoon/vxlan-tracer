@@ -102,7 +102,8 @@ sudo bpftrace spikes/bpftrace/ip_do_fragment.bt
 # Terminal 2 (after lab-up):
 ip netns exec ns1 curl --max-time 30 http://10.244.0.2/large.bin -o /dev/null
 ```
-**Expected:** Lines showing `[ip_do_fragment] outer_len=1564 dev=veth1 dev_mtu=1500 excess=64`
+**Expected:** Lines showing `[ip_do_fragment] outer_ip_len=1550 dev=veth1 dev_mtu=1500 ip_excess=50`
+(skb->len at ip_do_fragment is the outer IP packet length; kernel MTU check is outer IP 1550 vs MTU 1500 = 50 excess)
 **Actual:** COULD NOT RUN
 **Result:** SKIP
 **Caveat:** See docs/lab-topology.md for note on local netns fragmentation reassembly.
