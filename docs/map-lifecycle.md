@@ -53,6 +53,18 @@ BPF maps can be pinned to the BPF filesystem (bpffs, typically mounted at
 `/sys/fs/bpf`). A pinned map persists as a filesystem entry and can be accessed
 by path, surviving program reloads.
 
+### Day 5: filesystem setup implemented
+
+`scripts/setup-bpf-fs.sh` mounts bpffs at `/sys/fs/bpf` if not already mounted,
+and creates `/sys/fs/bpf/vxlan-tracer/` as the pin directory. It is idempotent
+— safe to run before every lab session. The Go loader (Commit 4) pins maps
+into this directory at attach time; until then, the directory exists and is
+ready but nothing pins into it yet.
+
+```sh
+sudo bash scripts/setup-bpf-fs.sh
+```
+
 ### Pinning plan for future Go loader
 
 ```
