@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mansoormmamnoon/vxlan-tracer/internal/bpfmap"
+	"github.com/mansoormmamnoon/vxlan-tracer/internal/diag"
 	"github.com/mansoormmamnoon/vxlan-tracer/internal/loader"
 )
 
@@ -75,8 +77,62 @@ func main() {
 		<-sigCh
 	}
 
+	verdict, diagErr := readVerdict(att, cfg.PinDir)
+
 	if err := att.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: detach error: %v\n", err)
 	}
 	fmt.Fprintln(os.Stderr, "detached kprobe (TC filters remain attached; maps remain pinned)")
+
+	if diagErr != nil {
+		fmt.Fprintf(os.Stderr, "error: diagnosis failed: %v\n", diagErr)
+		os.Exit(1)
+	}
+	fmt.Printf("verdict: %s\n", verdict.Verdict)
+	fmt.Printf("%s\n", verdict.Message)
+}
+
+// readVerdict opens the pinned maps written by the loader, builds a
+// diag.Observation from their current contents plus the live overlay/
+// underlay MTUs, and returns the resulting diagnosis.
+func readVerdict(att *loader.Attachment, pinDir string) (diag.Diagnosis, error) {
+	reader, err := bpfmap.OpenPinned(pinDir)
+	if err != nil {
+		return diag.Diagnosis{}, fmt.Errorf("open pinned maps: %w", err)
+	}
+	defer reader.Close()
+
+	ptbTotal, err := reader.PTBIngressTotal()
+	if err != nil {
+		return diag.Diagnosis{}, fmt.Errorf("read ptb_ingress_total: %w", err)
+	}
+	icmpTotal, err := reader.ICMPRcvTotal()
+	if err != nil {
+		return diag.Diagnosis{}, fmt.Errorf("read icmp_rcv_total: %w", err)
+	}
+	flows, err := reader.FlowState()
+	if err != nil {
+		return diag.Diagnosis{}, fmt.Errorf("read flow_state: %w", err)
+	}
+
+	var maxOuterIPLen int
+	for _, f := range flows {
+		if int(f.Value.MaxOuterIPLen) > maxOuterIPLen {
+			maxOuterIPLen = int(f.Value.MaxOuterIPLen)
+		}
+	}
+
+	overlayMTU, underlayMTU, err := att.MTUs()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not read interface MTUs: %v\n", err)
+	}
+
+	obs := diag.Observation{
+		PTBIngressTotal: ptbTotal,
+		ICMPRcvTotal:    icmpTotal,
+		MaxOuterIPLen:   maxOuterIPLen,
+		UnderlayMTU:     underlayMTU,
+		OverlayMTU:      overlayMTU,
+	}
+	return diag.Diagnose(obs), nil
 }

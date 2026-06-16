@@ -34,6 +34,8 @@ type Attachment struct {
 	egressColl  *ebpf.Collection
 	kprobeColl  *ebpf.Collection
 	kprobeLink  link.Link
+	underlay    netlink.Link
+	overlay     netlink.Link
 }
 
 // pinnedMaps lists, per BPF object, which map names should be pinned under
@@ -69,7 +71,7 @@ func Attach(cfg Config) (*Attachment, error) {
 		return nil, fmt.Errorf("ensure clsact qdisc on overlay %q: %w", cfg.Overlay, err)
 	}
 
-	a := &Attachment{}
+	a := &Attachment{underlay: underlay, overlay: overlay}
 
 	ingressColl, ingressProg, err := loadPinned(cfg.TCIngressObj, "tc_ingress_count_ptb", cfg.PinDir, pinnedMaps["ingress"])
 	if err != nil {
@@ -174,6 +176,22 @@ func attachTC(l netlink.Link, parent uint32, prog *ebpf.Program, name string) er
 		DirectAction: true,
 	}
 	return netlink.FilterAdd(filter)
+}
+
+// MTUs returns the current overlay and underlay interface MTUs, re-read at
+// call time (not cached from Attach), so callers see any change made after
+// attachment (e.g. a stale overlay MTU left over from before the underlay
+// MTU was reduced — the scenario this tool exists to diagnose).
+func (a *Attachment) MTUs() (overlayMTU, underlayMTU int, err error) {
+	u, err := netlink.LinkByIndex(a.underlay.Attrs().Index)
+	if err != nil {
+		return 0, 0, fmt.Errorf("re-read underlay MTU: %w", err)
+	}
+	o, err := netlink.LinkByIndex(a.overlay.Attrs().Index)
+	if err != nil {
+		return 0, 0, fmt.Errorf("re-read overlay MTU: %w", err)
+	}
+	return o.Attrs().MTU, u.Attrs().MTU, nil
 }
 
 // Close detaches the kprobe (which has no persistence outside this

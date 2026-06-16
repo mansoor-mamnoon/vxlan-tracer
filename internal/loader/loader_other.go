@@ -30,3 +30,8 @@ func Attach(cfg Config) (*Attachment, error) {
 
 // Close is a no-op on non-Linux platforms.
 func (a *Attachment) Close() error { return nil }
+
+// MTUs always fails on non-Linux platforms.
+func (a *Attachment) MTUs() (overlayMTU, underlayMTU int, err error) {
+	return 0, 0, errors.New("vxlan-tracer loader: MTU lookup requires Linux")
+}
