@@ -24,14 +24,20 @@ namespace environment. No production deployment required.
 - [x] PTB suppression detection: TC ingress > 0 AND icmp_rcv == 0 (Day 4, proven in lab)
 - [x] scripts/diagnose-from-bpftool.sh — three-verdict combiner (Day 4)
 - [x] docs/map-lifecycle.md — BPF map pinning rationale (Day 4)
-- [ ] icmp_rcv kprobe: CO-RE skb parsing to filter type=3 code=4 only (Day 5)
-- [ ] Go controller: clsact qdisc setup + BPF program attachment
-- [ ] Go controller: BPF link attachment for kprobe (replaces probe_attach.c)
-- [ ] Go controller: map polling loop with pinned maps (/sys/fs/bpf/vxlan-tracer/)
-- [ ] Diagnosis engine: MTU arithmetic + suppression detection (Go CLI)
-- [ ] Structured output (human-readable + JSON)
+- [x] icmp_rcv kprobe: CO-RE skb parsing to filter type=3 code=4 only (Day 5)
+- [x] Map pinning under /sys/fs/bpf/vxlan-tracer/ with stable paths (Day 5)
+- [x] Go controller: clsact qdisc setup + TC ingress/egress + kprobe attachment (Day 5)
+- [x] Go controller: BPF link attachment for kprobe (replaces probe_attach.c) (Day 5)
+- [x] Go controller: pinned-map reader (internal/bpfmap/pinned.go) (Day 5)
+- [x] Diagnosis engine: MTU arithmetic + suppression detection (Go CLI, internal/diag/verdict.go) (Day 5)
+- [x] End-to-end Go CLI verdict proven live: PTB_DELIVERED and PTB_SUPPRESSED both observed
+      through the actual binary, not a shell script (Day 5)
+- [ ] Structured (JSON) output
 - [ ] `make smoke-small` and `make smoke-large` passing end-to-end with BPF loaded
 - [ ] bpftrace ip_do_fragment.bt executed with field output (needs Lima VM + bpftrace 0.16+)
+- [ ] ip_do_fragment observed through BPF map data rather than ftrace only (Day 6)
+- [ ] Single polished `vxlan-tracer run` top-level command (current binary already does this;
+      needs subcommand/flag cleanup and a documented exit-code contract) (Day 6)
 
 ### V0 scope limitations
 

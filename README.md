@@ -2,7 +2,9 @@
 
 An eBPF-based diagnostic tool for VXLAN MTU blackholes.
 
-**Status: spike / prototype — the BPF programs are not yet implemented.**
+**Status: lab-validated prototype — BPF programs implemented, Go CLI attaches,
+pins maps, reads them back, and prints a verdict. Proven end-to-end in a
+netns lab (Day 5); not production-validated.**
 
 ---
 
@@ -92,16 +94,21 @@ sudo vxlan-tracer --overlay vxlan0 --underlay eth0 --json
 
 | Component | Status |
 |-----------|--------|
-| CLI skeleton | done (exits with error — BPF not implemented) |
+| CLI skeleton | done — attaches BPF, pins maps, reads them, prints a verdict |
 | Lab topology scripts | done (Linux-only) |
 | bpftrace spike probes | done (Linux-only) |
-| TC egress BPF (C) | not started |
-| TC ingress BPF (C) | not started |
-| ip_do_fragment kprobe (C) | not started |
-| icmp_rcv fentry (C) | not started |
-| Go controller (map polling) | not started |
-| Diagnosis output | not started |
+| TC egress BPF (C) | done — `tc_egress_track_flow`, pinned `flow_state` map |
+| TC ingress BPF (C) | done — `tc_ingress_count_ptb`, pinned `ptb_ingress_*` maps |
+| icmp_rcv kprobe (C) | done — CO-RE filtered to ICMP type=3/code=4, pinned `icmp_rcv_total` |
+| ip_do_fragment kprobe (C) | not started — currently observed via ftrace only, not a BPF map |
+| Go controller (attach + pin + read) | done — `internal/loader`, `internal/bpfmap` |
+| Diagnosis engine | done — `internal/diag/verdict.go`, 5-verdict precedence logic |
+| Structured (JSON) output | not started |
 | CI test suite | not started |
+
+PTB_DELIVERED and PTB_SUPPRESSED verdicts have both been proven live through
+the actual Go binary (no shell script, no bpftool, no manual counter
+comparison) — see `evidence/day-05.md`.
 
 ## Lab setup
 

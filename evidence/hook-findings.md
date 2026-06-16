@@ -190,7 +190,58 @@ The ftrace kprobe on ip_do_fragment is global (all namespaces). For a 3-ping
 test with ns1→ns2: 3 events from ns1 (send path) + 3 events from ns2 (reply
 path) = 6 events total. Both sides have underlay MTU=1400 and both fragment.
 
-## Updated hook confidence table (post-Day 4)
+## Day 5 findings (Docker linuxkit 6.10.14-linuxkit aarch64)
+
+### Finding 15: apt's libbpf0/libbpf-dev is too old to parse this kernel's BTF
+
+The `icmp_rcv` CO-RE kprobe (filtering to ICMP type=3/code=4 via
+`preserve_access_index` on a partial `sk_buff` struct) requires a libbpf new
+enough to relocate CO-RE accesses against this kernel's `/sys/kernel/btf/vmlinux`
+encoding. apt's `libbpf0`/`libbpf-dev` on ubuntu:22.04 is v0.5.0, which fails to
+parse this kernel's BTF and aborts relocation at load time. **Fix:** built
+libbpf v1.4.0 from source (`make -C src BUILD_STATIC_ONLY=y`) and linked against
+that instead. This is a reusable finding for anyone doing CO-RE work against
+recent kernels (6.x) from an ubuntu:22.04 base image — the distro libbpf is too
+old and the failure mode (BTF parse error, not a missing-symbol error) is easy
+to misattribute to the BPF program itself rather than the loader library.
+
+### Finding 16: `ip netns exec` detaches the bpffs mount, breaking BPF_OBJ_PIN
+
+`ip netns exec <ns> <cmd>` internally calls `unshare(CLONE_NEWNS)` and then
+unmounts/remounts a fresh `sysfs` on `/sys` inside the child process, before
+running `<cmd>`. This detaches any bpffs mount that exists in the parent mount
+namespace (e.g. the `/sys/fs/bpf` mount created by `scripts/setup-bpf-fs.sh`),
+even though the directory is still visible from the parent shell. Any `BPF_OBJ_PIN`
+syscall made by `<cmd>` then fails with `ENOENT`, with an error message
+(`pin map to /sys/fs/bpf/...: no such file or directory`) that looks like a
+missing-directory bug rather than a mount-namespace interaction — `ls -la` from
+the parent shell shows the directory exists, which is initially misleading.
+
+**Fix:** use `nsenter --net=/var/run/netns/<ns> -- <cmd>` instead of
+`ip netns exec <ns> <cmd>` whenever the command needs to both (a) resolve
+interface names inside a network namespace and (b) interact with bpffs.
+`nsenter` only joins the namespaces explicitly passed as flags — with only
+`--net` given, the mount namespace (and its bpffs mount) is left untouched,
+while interface name lookups still resolve correctly inside the target netns.
+This is a generally reusable finding beyond this project: any BPF tool that
+pins maps while also needing netns-scoped interface resolution should prefer
+`nsenter --net=...` over `ip netns exec` for exactly this reason.
+
+### Finding 17: ELF program names are the C function name after SEC(), not the object file name
+
+cilium/ebpf's `coll.Programs[name]` lookup is keyed by the actual C function
+name following the `SEC("tc")` / `SEC("kprobe/...")` annotation in the BPF
+source — not the `.bpf.o` file's base name. The Go loader's first attach
+attempt used object-file-derived names (`tc_ingress_eth0`, `tc_egress_vxlan0`)
+and failed with `program "tc_ingress_eth0" not found in object`. The actual
+function names in `bpf/tc_ingress_eth0.bpf.c` / `bpf/tc_egress_vxlan0.bpf.c` /
+`bpf/kprobes.bpf.c` are `tc_ingress_count_ptb`, `tc_egress_track_flow`, and
+`kprobe_icmp_rcv` respectively (the kprobe name happened to already match).
+**Fix:** read the actual `SEC(...)` function names from the BPF source rather
+than assuming they match the file name, and use those in the loader's
+`coll.Programs[...]` lookups.
+
+## Updated hook confidence table (post-Day 5)
 
 | Hook | Verified how | Confidence |
 |------|-------------|------------|
@@ -207,5 +258,7 @@ path) = 6 events total. Both sides have underlay MTU=1400 and both fragment.
 | BTF vmlinux present on linuxkit | file size 6.2MB confirmed | **CONFIRMED** |
 | TC egress vxlan0 fires before VXLAN encap | flow_state populated; max_outer_ip_len=1478 | **CONFIRMED** |
 | TC ingress eth0 fires before netfilter | ptb_count=5 after 5 synthetic PTBs | **CONFIRMED** |
+| icmp_rcv kprobe filters type=3 code=4 only | CO-RE skb parse; 0/5 for ping/PTB resp. | **CONFIRMED** (Day 5) |
+| Go loader can attach TC ingress/egress + kprobe + pin maps | live attach, `tc filter show`, `ls /sys/fs/bpf/...` | **CONFIRMED** (Day 5) |
+| Go CLI reads pinned maps and prints correct verdict | PTB_DELIVERED and PTB_SUPPRESSED both proven live | **CONFIRMED** (Day 5) |
 | bpftrace can read skb->dev->name in kprobe | Not verified (bpftrace broken on linuxkit) | Unknown |
-| icmp_rcv kprobe filters type=3 code=4 only | Not implemented (counts all ICMP) | Not yet |

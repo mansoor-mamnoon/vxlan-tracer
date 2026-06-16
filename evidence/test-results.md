@@ -356,3 +356,87 @@ iptables: 5 pkts/280 bytes matched DROP rule (icmptype 3 code 4)
 **Result:** PASS — PTB suppression detected: TC ingress > 0, icmp_rcv == 0
 **Caveat:** Lab uses synthetic PTBs. In production, PTBs arrive from cloud fabric. Mechanism
 is identical. See evidence/day-04-ptb-suppression.md for kernel path diagram.
+
+---
+
+## 2026-06-15 — filtered icmp_rcv counter: ping vs. PTB — Day 5
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64, libbpf v1.4.0 built from source
+**Command:**
+```sh
+ip netns exec ns2 ping -c 5 192.168.100.1
+ip netns exec ns2 python3 spikes/inject_ptb.py \
+  --src 192.168.100.2 --dst 192.168.100.1 --dev veth2 --next-hop-mtu 1400 --count 5
+# /tmp/probe_attach polling loop reading icmp_rcv_total every 2s
+```
+**Expected:** counter stays 0 across 5 pings, jumps to 5 after 5 injected PTBs, stays at 5
+**Actual:**
+```
+t=2s..t=10s (during pings):    icmp_rcv_total = 0
+t=12s (after PTB injection):   icmp_rcv_total = 5
+t=14s..t=36s:                  icmp_rcv_total = 5 (stable)
+```
+**Result:** PASS — kprobe correctly filters to ICMP type=3/code=4, ignoring ping traffic
+**Caveat:** Required building libbpf v1.4.0 from source; apt's libbpf0 0.5.0 cannot parse this
+kernel's BTF encoding. See evidence/day-05-icmp-rcv-filter.md and day-05-icmp-rcv-verify.md.
+
+---
+
+## 2026-06-15 — Go loader attach: TC ingress/egress + kprobe + map pinning — Day 5
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64, Go binary cross-compiled
+GOOS=linux GOARCH=arm64 from macOS, invoked via `nsenter --net=/var/run/netns/ns1`
+**Command:**
+```sh
+nsenter --net=/var/run/netns/ns1 -- vxlan-tracer-linux-arm64 \
+  --overlay vxlan0 --underlay veth1 --pin-dir /sys/fs/bpf/vxlan-tracer \
+  --bpf-dir /tmp/bpfobjs --duration 30s
+ip netns exec ns1 tc filter show dev veth1 ingress
+ip netns exec ns1 tc filter show dev vxlan0 egress
+ls -la /sys/fs/bpf/vxlan-tracer/
+```
+**Expected:** TC filters attached on both interfaces, all 4 maps pinned, kprobe attached
+**Actual:**
+```
+tc_ingress_eth0 direct-action not_in_hw id 310 jited   (veth1 ingress)
+tc_egress_vxlan0 direct-action not_in_hw id 311 jited  (vxlan0 egress)
+/sys/fs/bpf/vxlan-tracer/: flow_state, icmp_rcv_total, ptb_ingress_counts, ptb_ingress_total
+```
+**Result:** PASS — after fixing two bugs (see below), maps pinned/cleaned up correctly,
+TC filters and pinned maps survive process exit, exit code 0.
+**Caveat:** First two attempts failed: (1) `ip netns exec` unshares the mount namespace and
+detaches the bpffs mount, breaking pinning — fixed by using `nsenter --net=...` instead;
+(2) program names in the loader didn't match the compiled object's ELF program names — fixed.
+See evidence/day-05-go-loader.md for full detail; failures documented, not hidden.
+
+---
+
+## 2026-06-15 — unsuppressed/suppressed PTB tests via Go CLI verdict — Day 5
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64, Go binary only (no bpftool, no shell diagnosis script)
+**Command:**
+```sh
+# Run A: no iptables rule
+nsenter --net=/var/run/netns/ns1 -- vxlan-tracer-linux-arm64 --overlay vxlan0 --underlay veth1 \
+  --pin-dir /sys/fs/bpf/vxlan-tracer --bpf-dir /tmp/bpfobjs --duration 20s &
+ip netns exec ns2 python3 spikes/inject_ptb.py --src 192.168.100.2 --dst 192.168.100.1 --dev veth2 --next-hop-mtu 1400 --count 5
+
+# Run B: iptables DROP rule for icmp type 3 code 4 installed first
+ip netns exec ns1 iptables -A INPUT -p icmp --icmp-type 3/4 -j DROP
+nsenter --net=/var/run/netns/ns1 -- vxlan-tracer-linux-arm64 ... --duration 20s &
+ip netns exec ns2 python3 spikes/inject_ptb.py ... --count 5
+```
+**Expected:** Run A prints verdict PTB_DELIVERED (5/5); Run B prints verdict PTB_SUPPRESSED (5/0)
+**Actual:**
+```
+Run A: verdict: PTB_DELIVERED
+       5 ICMP type=3/code=4 packet(s) were observed at TC ingress and 5 reached icmp_rcv...
+Run B: verdict: PTB_SUPPRESSED
+       5 ICMP type=3/code=4 packet(s) were observed at TC ingress, but 0 reached icmp_rcv...
+       (iptables packet counter independently confirmed 5 pkts/280 bytes matched the DROP rule)
+```
+**Result:** PASS — both branches of the Day 5 success condition proven through the actual Go
+CLI binary: attach, observe, read pinned maps, diagnose, print verdict, detach.
+**Caveat:** Suppression mechanism tested was iptables DROP only; other mechanisms (nftables,
+conntrack, security modules) not tested. See evidence/day-05-unsuppressed-go.md and
+evidence/day-05-suppressed-go.md.
