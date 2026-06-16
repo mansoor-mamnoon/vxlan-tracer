@@ -1,0 +1,140 @@
+=== build libbpf v1.4.0 (newer libbpf needed to parse kernel 6.10+ BTF) ===
+Turn off this advice by setting config variable advice.detachedHead to false
+
+libbpf build exit: 0
+=== compile kprobes.bpf.o (filtered: type=3 code=4 only) ===
+kprobes.bpf.o compile exit: 0
+=== compile probe_attach.c against libbpf v1.4.0 (static, polling loader) ===
+probe_attach compile exit: 0
+=== setup netns lab ===
+[setup] Cleaning up any existing topology...
+[teardown] Stopping HTTP server in ns2 (if running)...
+[teardown] Removing network namespaces...
+[teardown] ns1 not found (ok)
+[teardown] ns2 not found (ok)
+[teardown] Cleaning up lab files...
+[teardown] Done.
+[setup] Creating network namespaces...
+[setup] Creating veth pair veth1 <-> veth2...
+[setup] Configuring ns1 underlay (veth1 192.168.100.1/24, MTU=1500)...
+[setup] Configuring ns2 underlay (veth2 192.168.100.2/24, MTU=1500)...
+[setup] Creating VXLAN in ns1 (kernel will auto-set MTU=1450)...
+[setup] Creating VXLAN in ns2 (kernel will auto-set MTU=1450)...
+[setup] vxlan0 MTU after creation: 1450 (expected 1450)
+[setup] Reducing underlay MTU to 1400 AFTER vxlan0 creation...
+[setup]   vxlan0 MTU stays at 1450 (stale); underlay now 1400
+[setup]   max safe inner IP = 1350; inner IP > that → ip_do_fragment
+[setup] Verifying underlay reachability...
+[setup] underlay ping: OK
+[setup] Verifying overlay reachability (small ping, payload 40B)...
+[setup] overlay ping (small): OK
+[setup] Creating HTTP server content in /tmp/vxlan-lab-www...
+[setup] Created large.bin (5MB base64)
+[setup] Starting Python HTTP server in ns2 on 10.244.0.2:80...
+[setup] HTTP server PID: 6498 (log: /tmp/vxlan-lab-http.log)
+
+Lab topology ready:
+  ns1: vxlan0=10.244.0.1/24 (MTU=1450 stale)  veth1=192.168.100.1/24 (MTU=1400)
+  ns2: vxlan0=10.244.0.2/24 (MTU=1450 stale)  veth2=192.168.100.2/24 (MTU=1400)
+  VNI=42  port=4789
+
+MTU arithmetic:
+  underlay MTU:     1400
+  VXLAN overhead:   50 bytes (inner ETH 14 + outer IP 20 + outer UDP 8 + VXLAN hdr 8)
+  max safe inner IP: 1350 (underlay 1400 - 50)
+  vxlan0 MTU stale: 1450 (was correct for underlay 1500; now too high)
+  blackhole zone:   inner IP > 1350 → outer IP > 1400 → ip_do_fragment
+
+Run smoke tests:
+  make smoke-small   (payload 40B: inner IP 68B, outer IP 118B, safe)
+  make smoke-large   (payload 1360B: inner IP 1388B, outer IP 1438B > 1400 → fragment)
+lab setup exit: 0
+=== attach filtered kprobe (background, 36s, polls every 2s) ===
+--- probe output so far (after attach) ---
+probe_attach: kprobe/icmp_rcv attached to kernel icmp_rcv
+probe_attach: icmp_rcv_total at attach = 0
+probe_attach: polling every 2s for 36 seconds (inject traffic from another shell)...
+probe_attach: t=2s icmp_rcv_total = 0
+=== send 5 normal pings ns1 -> ns2 underlay (should NOT increment filtered counter) ===
+PING 192.168.100.2 (192.168.100.2) 56(84) bytes of data.
+64 bytes from 192.168.100.2: icmp_seq=1 ttl=64 time=0.117 ms
+64 bytes from 192.168.100.2: icmp_seq=2 ttl=64 time=0.156 ms
+64 bytes from 192.168.100.2: icmp_seq=3 ttl=64 time=0.156 ms
+64 bytes from 192.168.100.2: icmp_seq=4 ttl=64 time=0.159 ms
+64 bytes from 192.168.100.2: icmp_seq=5 ttl=64 time=0.044 ms
+
+--- 192.168.100.2 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 4122ms
+rtt min/avg/max/mdev = 0.044/0.126/0.159/0.044 ms
+--- probe output after normal pings ---
+probe_attach: kprobe/icmp_rcv attached to kernel icmp_rcv
+probe_attach: icmp_rcv_total at attach = 0
+probe_attach: polling every 2s for 36 seconds (inject traffic from another shell)...
+probe_attach: t=2s icmp_rcv_total = 0
+probe_attach: t=4s icmp_rcv_total = 0
+probe_attach: t=6s icmp_rcv_total = 0
+probe_attach: t=8s icmp_rcv_total = 0
+probe_attach: t=10s icmp_rcv_total = 0
+=== inject 5 synthetic ICMP PTBs (type=3 code=4) ns2 -> ns1 (no iptables DROP) ===
+Injecting 5 synthetic ICMP PTB(s):
+  src=192.168.100.2 → dst=192.168.100.1
+  next_hop_mtu=1400
+  embedded: 192.168.100.1→192.168.100.2 UDP dport=4789 (outer IP len=1438 DF=1)
+  interface: veth2
+
+  sent 1/5
+  sent 2/5
+  sent 3/5
+  sent 4/5
+  sent 5/5
+
+Done. Sent 5 ICMP PTB(s).
+
+To verify PTB was received (before netfilter):
+  Check TC ingress counter on the underlay interface in ns1.
+  If iptables DROP rule is active in ns1 (icmptype 3 code 4),
+  icmp_rcv count will be 0 but TC ingress count will be > 0.
+  That delta is the suppression signal vxlan-tracer detects.
+--- probe output after PTB injection ---
+probe_attach: kprobe/icmp_rcv attached to kernel icmp_rcv
+probe_attach: icmp_rcv_total at attach = 0
+probe_attach: polling every 2s for 36 seconds (inject traffic from another shell)...
+probe_attach: t=2s icmp_rcv_total = 0
+probe_attach: t=4s icmp_rcv_total = 0
+probe_attach: t=6s icmp_rcv_total = 0
+probe_attach: t=8s icmp_rcv_total = 0
+probe_attach: t=10s icmp_rcv_total = 0
+probe_attach: t=12s icmp_rcv_total = 5
+probe_attach: t=14s icmp_rcv_total = 5
+=== waiting for probe_attach to finish (remaining duration) ===
+probe_attach exit: 0
+=== FINAL probe output ===
+probe_attach: kprobe/icmp_rcv attached to kernel icmp_rcv
+probe_attach: icmp_rcv_total at attach = 0
+probe_attach: polling every 2s for 36 seconds (inject traffic from another shell)...
+probe_attach: t=2s icmp_rcv_total = 0
+probe_attach: t=4s icmp_rcv_total = 0
+probe_attach: t=6s icmp_rcv_total = 0
+probe_attach: t=8s icmp_rcv_total = 0
+probe_attach: t=10s icmp_rcv_total = 0
+probe_attach: t=12s icmp_rcv_total = 5
+probe_attach: t=14s icmp_rcv_total = 5
+probe_attach: t=16s icmp_rcv_total = 5
+probe_attach: t=18s icmp_rcv_total = 5
+probe_attach: t=20s icmp_rcv_total = 5
+probe_attach: t=22s icmp_rcv_total = 5
+probe_attach: t=24s icmp_rcv_total = 5
+probe_attach: t=26s icmp_rcv_total = 5
+probe_attach: t=28s icmp_rcv_total = 5
+probe_attach: t=30s icmp_rcv_total = 5
+probe_attach: t=32s icmp_rcv_total = 5
+probe_attach: t=34s icmp_rcv_total = 5
+probe_attach: t=36s icmp_rcv_total = 5
+probe_attach: icmp_rcv_total at detach = 5
+=== teardown ===
+[teardown] Stopping HTTP server in ns2 (if running)...
+[teardown] Removing network namespaces...
+[teardown] deleted ns1
+[teardown] deleted ns2
+[teardown] Cleaning up lab files...
+[teardown] Done.

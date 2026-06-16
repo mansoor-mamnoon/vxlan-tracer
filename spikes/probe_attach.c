@@ -87,10 +87,18 @@ int main(int argc, char *argv[])
 	bpf_map_lookup_elem(map_fd, &key, &val);
 	printf("probe_attach: kprobe/icmp_rcv attached to kernel icmp_rcv\n");
 	printf("probe_attach: icmp_rcv_total at attach = %llu\n", (unsigned long long)val);
-	printf("probe_attach: running for %d seconds...\n", duration);
+	printf("probe_attach: polling every 2s for %d seconds (inject traffic from another shell)...\n", duration);
 	fflush(stdout);
 
-	sleep(duration);
+	int elapsed = 0;
+	while (elapsed < duration) {
+		sleep(2);
+		elapsed += 2;
+		val = 0;
+		bpf_map_lookup_elem(map_fd, &key, &val);
+		printf("probe_attach: t=%ds icmp_rcv_total = %llu\n", elapsed, (unsigned long long)val);
+		fflush(stdout);
+	}
 
 	val = 0;
 	bpf_map_lookup_elem(map_fd, &key, &val);
