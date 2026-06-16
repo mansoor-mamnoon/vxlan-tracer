@@ -1,53 +1,61 @@
 /*
  * bpf/kprobes.bpf.c
  *
- * Kprobe BPF program for post-netfilter ICMP receive counting.
+ * Kprobe BPF program for post-netfilter ICMP PTB counting.
  *
  * Hook: kprobe/icmp_rcv
  *
  * Kernel path for incoming ICMP:
  *   NIC → TC ingress (clsact) → ip_rcv → netfilter INPUT → icmp_rcv
  *
- * icmp_rcv is called AFTER the netfilter INPUT chain. If iptables has a
- * DROP rule for ICMP type 3 code 4 (fragmentation needed), the packet is
- * discarded before icmp_rcv and this counter does NOT increment.
+ * icmp_rcv fires AFTER the netfilter INPUT chain. If iptables has a DROP rule
+ * for ICMP type 3 code 4, the packet is discarded before icmp_rcv and this
+ * counter does NOT increment.
  *
- * Suppression detection signal:
- *   TC ingress count  > 0   (PTB arrived before netfilter)
- *   icmp_rcv_total   == 0   (PTB was dropped by netfilter)
- *   → PTB suppressed by iptables/nft
+ * Day 5 update: filters to ICMP type 3 code 4 only.
+ *   Day 4 counted all icmp_rcv calls (valid only in isolated lab traffic with
+ *   no other ICMP). This update makes the counter meaningful in environments
+ *   with ping traffic or other ICMP types.
  *
- *   TC ingress count  > 0   (PTB arrived before netfilter)
- *   icmp_rcv_total   > 0    (PTB reached icmp_rcv — not suppressed)
- *   → PTB delivered normally
+ * Approach: partial struct sk_buff declaration with preserve_access_index.
+ * This causes clang to emit a CO-RE BTF field relocation for skb->data.
+ * libbpf resolves the actual offset at load time from /sys/kernel/btf/vmlinux.
+ * Does not require vmlinux.h or a full BTF header — only BTF at load time.
  *
- * Scope: this kprobe is attached globally (not per-namespace). In an
- * isolated lab environment (ns1+ns2 only, no other ICMP traffic) the
- * counter reflects only the injected PTBs.
+ * At icmp_rcv entry, ip_local_deliver_finish has called:
+ *   __skb_pull(skb, skb_network_header_len(skb))
+ * which moves skb->data past the IP header. skb->data therefore points to the
+ * start of the ICMP header (type at offset 0, code at offset 1).
  *
- * Counting all icmp_rcv calls (not filtered by type/code): in our lab
- * test, only ICMP PTBs are injected; no other ICMP traffic is generated.
- * Therefore icmp_rcv_total == number of PTBs that passed netfilter.
- *
- * icmp_send is NOT used here: Day 2 established that icmp_send is not a
- * T symbol on kernel 6.10.14-linuxkit (use tracepoint:net:icmp_send
- * if icmp_send observation is needed in future work).
- *
- * icmp_rcv IS a T symbol on kernel 6.10.14-linuxkit:
- *   grep ' T icmp_rcv$' /proc/kallsyms → confirmed Day 2
- *
- * Attach (via spikes/probe_attach.c C loader or Go cilium/ebpf loader):
- *   The kprobe section name "kprobe/icmp_rcv" tells libbpf which function
- *   to probe. Attach via bpf_program__attach_kprobe().
+ * Suppression detection signal (unchanged from Day 4):
+ *   TC ingress count > 0   AND   icmp_rcv_total == 0
+ *   → PTBs arrived at underlay but iptables/nft dropped them before icmp_rcv
  */
 
 #include <linux/bpf.h>
+#include <linux/ptrace.h>      /* struct user_pt_regs for PT_REGS_ARM64 on aarch64 */
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+
+#define ICMP_DEST_UNREACH  3
+#define ICMP_FRAG_NEEDED   4
 
 /*
- * Map: global count of icmp_rcv invocations seen after netfilter.
+ * Partial sk_buff for CO-RE: only the 'data' field is declared.
+ * preserve_access_index tells clang to emit a BTF relocation for every access
+ * to a member of this struct, so the actual byte offset is resolved at
+ * load time rather than baked in at compile time.
+ */
+struct sk_buff {
+	unsigned char *data;
+} __attribute__((preserve_access_index));
+
+/*
+ * Map: global count of icmp_rcv invocations for ICMP PTBs only (post-netfilter).
  * Single-entry ARRAY: key 0 → u64 count.
+ * Day 4: counted all icmp_rcv calls.
+ * Day 5: filters to type=3 code=4 before incrementing.
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -56,19 +64,28 @@ struct {
 	__type(value, __u64);
 } icmp_rcv_total SEC(".maps");
 
-/*
- * kprobe/icmp_rcv — fires every time icmp_rcv() is called in the kernel.
- *
- * No packet parsing: we count every invocation. The caller controls the test
- * environment so only PTBs are delivered to ns1 during the test window.
- *
- * Does not inspect skb content (no struct field access, no CO-RE required).
- * This keeps the verifier proof trivially short and avoids dependence on
- * struct sk_buff layout across kernel versions.
- */
 SEC("kprobe/icmp_rcv")
 int kprobe_icmp_rcv(struct pt_regs *ctx)
 {
+	struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
+
+	/*
+	 * Read skb->data via CO-RE relocation.
+	 * At icmp_rcv entry, skb->data points to the ICMP header start
+	 * (ip_local_deliver_finish pulled past the IP header before dispatching).
+	 */
+	unsigned char *data = (unsigned char *)BPF_CORE_READ(skb, data);
+
+	__u8 type = 0, code = 0;
+	if (bpf_probe_read_kernel(&type, sizeof(type), data) < 0)
+		return 0;
+	if (bpf_probe_read_kernel(&code, sizeof(code), data + 1) < 0)
+		return 0;
+
+	/* Only count ICMP Destination Unreachable / Fragmentation Needed */
+	if (type != ICMP_DEST_UNREACH || code != ICMP_FRAG_NEEDED)
+		return 0;
+
 	__u32 zero = 0;
 	__u64 *total = bpf_map_lookup_elem(&icmp_rcv_total, &zero);
 	if (total)

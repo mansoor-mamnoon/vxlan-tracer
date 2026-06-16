@@ -19,14 +19,29 @@ else
   _ARCH_INC :=
 endif
 
-# BPF compile flags.
-# -D__TARGET_ARCH_* is intentionally absent: TC sched_cls programs access
-# packet data via struct __sk_buff and do not use arch-specific kprobe/
-# tracepoint context accessor helpers that require that define.
+# BPF compile flags for TC sched_cls programs.
+# -D__TARGET_ARCH_* is absent: TC programs access packet data via struct
+# __sk_buff and do not use arch-specific PT_REGS_PARM1 accessor macros.
 CFLAGS_BPF := -O2 -g -target bpf \
               -I/usr/include \
               $(_ARCH_INC) \
               -Wall -Wno-unused-value -Wno-pointer-sign
+
+# -D__TARGET_ARCH_* for kprobe programs that use PT_REGS_PARM1 to read the
+# first function argument from the pt_regs context. bpf_tracing.h uses this
+# define to select the correct register name for the host architecture.
+ifeq ($(_HOST_ARCH),aarch64)
+  _TARGET_ARCH_DEFINE := -D__TARGET_ARCH_arm64
+else ifeq ($(_HOST_ARCH),x86_64)
+  _TARGET_ARCH_DEFINE := -D__TARGET_ARCH_x86
+else
+  _TARGET_ARCH_DEFINE :=
+endif
+
+# Kprobe BPF flags: same as CFLAGS_BPF plus the target-arch define.
+# Also uses CO-RE via preserve_access_index; no vmlinux.h needed —
+# clang emits BTF relocations that libbpf resolves at load time.
+CFLAGS_BPF_KPROBE := $(CFLAGS_BPF) $(_TARGET_ARCH_DEFINE)
 
 .PHONY: all build bpf bpf-check generate lint vet \
         lab-up lab-down smoke-small smoke-large \
@@ -60,10 +75,11 @@ bpf/tc_egress_vxlan0.bpf.o: bpf/tc_egress_vxlan0.bpf.c bpf/maps.h
 	@echo "  CC  $@"
 	$(CLANG) $(CFLAGS_BPF) -c $< -o $@
 
-# kprobes.bpf.c uses kprobe section; attached via probe_attach.c (not tc filter)
+# kprobes.bpf.c: kprobe section + CO-RE partial struct. Needs __TARGET_ARCH_*
+# for PT_REGS_PARM1 and emits BTF relocations for skb->data field access.
 bpf/kprobes.bpf.o: bpf/kprobes.bpf.c
 	@echo "  CC  $@"
-	$(CLANG) $(CFLAGS_BPF) -c $< -o $@
+	$(CLANG) $(CFLAGS_BPF_KPROBE) -c $< -o $@
 
 bpf-check:
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
