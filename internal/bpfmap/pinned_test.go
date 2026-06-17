@@ -24,6 +24,8 @@ func TestPinnedStructSizes(t *testing.T) {
 		{"PinnedFlowKey", unsafe.Sizeof(PinnedFlowKey{}), 16},
 		// struct flow_val: __u64 + __u32 + __u16 + __u16 = 16 bytes.
 		{"PinnedFlowVal", unsafe.Sizeof(PinnedFlowVal{}), 16},
+		// struct frag_val: __u64 + __u64 + __u32 + __u32 (pad) = 24 bytes.
+		{"PinnedFragVal", unsafe.Sizeof(PinnedFragVal{}), 24},
 	}
 	for _, c := range cases {
 		if c.got != c.want {

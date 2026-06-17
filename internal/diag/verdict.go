@@ -65,6 +65,16 @@ type Observation struct {
 	// overlay interfaces. 0 means unknown / not supplied.
 	UnderlayMTU int
 	OverlayMTU  int
+
+	// FragEventsTotal is the count from the ip_do_fragment kprobe map
+	// (frag_events_total.total). A value > 0 means the kernel fragmented at
+	// least one outgoing IP packet while vxlan-tracer was attached. In the
+	// stale-MTU topology (vxlan0 MTU stale at 1450, underlay MTU 1400) any
+	// large VXLAN packet triggers ip_do_fragment. 0 means nothing fragmented.
+	// NOTE: this counter fires for all IP fragmentation on the host, not only
+	// VXLAN outer packets — in production environments with other fragmented
+	// traffic the count may be inflated.
+	FragEventsTotal uint64
 }
 
 // Diagnosis is the result of Diagnose: a verdict plus the explanation that

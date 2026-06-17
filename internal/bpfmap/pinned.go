@@ -76,22 +76,34 @@ type PinnedFlowEntry struct {
 	Value PinnedFlowVal
 }
 
-// PinnedReader holds open handles to the four pinned vxlan-tracer maps.
+// PinnedFragVal mirrors struct frag_val from bpf/maps.h.
+// The initial count-only implementation (commit 2) leaves LastSeenNS and
+// MaxSKBLen as zero; they are populated in commit 7 when skb field reads
+// are added to the ip_do_fragment kprobe.
+type PinnedFragVal struct {
+	Total      uint64
+	LastSeenNS uint64
+	MaxSKBLen  uint32
+	Pad        uint32
+}
+
+// PinnedReader holds open handles to the five pinned vxlan-tracer maps.
 // It does not attach or create anything; the maps must already be pinned
 // by a prior internal/loader.Attach call (see scripts/setup-bpf-fs.sh and
 // docs/map-lifecycle.md).
 type PinnedReader struct {
-	ptbTotal     *ebpf.Map
-	icmpRcvTotal *ebpf.Map
-	ptbCounts    *ebpf.Map
-	flowState    *ebpf.Map
+	ptbTotal      *ebpf.Map
+	icmpRcvTotal  *ebpf.Map
+	ptbCounts     *ebpf.Map
+	flowState     *ebpf.Map
+	fragTotal     *ebpf.Map
 }
 
-// OpenPinned opens all four pinned vxlan-tracer maps under pinDir
+// OpenPinned opens all five pinned vxlan-tracer maps under pinDir
 // (e.g. /sys/fs/bpf/vxlan-tracer). If any map fails to open, the maps
 // already opened in this call are closed before returning the error.
 func OpenPinned(pinDir string) (*PinnedReader, error) {
-	opened := make([]*ebpf.Map, 0, 4)
+	opened := make([]*ebpf.Map, 0, 5)
 	closeOpened := func() {
 		for _, m := range opened {
 			m.Close()
@@ -124,12 +136,17 @@ func OpenPinned(pinDir string) (*PinnedReader, error) {
 	if err != nil {
 		return nil, err
 	}
+	fragTotal, err := open("frag_events_total")
+	if err != nil {
+		return nil, err
+	}
 
 	return &PinnedReader{
 		ptbTotal:     ptbTotal,
 		icmpRcvTotal: icmpRcvTotal,
 		ptbCounts:    ptbCounts,
 		flowState:    flowState,
+		fragTotal:    fragTotal,
 	}, nil
 }
 
@@ -150,6 +167,18 @@ func readArrayCounter(m *ebpf.Map, name string) (uint64, error) {
 	var val uint64
 	if err := m.Lookup(uint32(0), &val); err != nil {
 		return 0, fmt.Errorf("lookup %s key 0: %w", name, err)
+	}
+	return val, nil
+}
+
+// FragEventsTotal reads the single-entry ARRAY (key 0) from frag_events_total:
+// the struct frag_val recording total ip_do_fragment invocations observed
+// since the kprobe was attached. In the count-only phase (commits 2-6),
+// LastSeenNS and MaxSKBLen are zero; they are populated after commit 7.
+func (r *PinnedReader) FragEventsTotal() (PinnedFragVal, error) {
+	var val PinnedFragVal
+	if err := r.fragTotal.Lookup(uint32(0), &val); err != nil {
+		return PinnedFragVal{}, fmt.Errorf("lookup frag_events_total key 0: %w", err)
 	}
 	return val, nil
 }
@@ -184,7 +213,7 @@ func (r *PinnedReader) FlowState() ([]PinnedFlowEntry, error) {
 	return entries, nil
 }
 
-// Close closes all four map file descriptors. It does not unpin them —
+// Close closes all five map file descriptors. It does not unpin them —
 // the pinned files under pinDir remain, owned by the bpffs, not by this
 // reader.
 func (r *PinnedReader) Close() {
@@ -192,4 +221,5 @@ func (r *PinnedReader) Close() {
 	r.icmpRcvTotal.Close()
 	r.ptbCounts.Close()
 	r.flowState.Close()
+	r.fragTotal.Close()
 }
