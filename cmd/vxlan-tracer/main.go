@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +14,25 @@ import (
 	"github.com/mansoormmamnoon/vxlan-tracer/internal/diag"
 	"github.com/mansoormmamnoon/vxlan-tracer/internal/loader"
 )
+
+// jsonReport is the structure emitted when --json is passed. Field names are
+// snake_case to match common CLI/API conventions. All counter fields are
+// unsigned ints so the consumer can reliably check > 0 without sign concerns.
+// recommended_overlay_mtu is 0 when the current overlay MTU is already safe
+// or when MTU data was unavailable.
+type jsonReport struct {
+	Verdict               string `json:"verdict"`
+	Message               string `json:"message"`
+	Overlay               string `json:"overlay"`
+	Underlay              string `json:"underlay"`
+	OverlayMTU            int    `json:"overlay_mtu"`
+	UnderlayMTU           int    `json:"underlay_mtu"`
+	RecommendedOverlayMTU int    `json:"recommended_overlay_mtu,omitempty"`
+	PTBIngressTotal       uint64 `json:"ptb_ingress_total"`
+	ICMPRcvTotal          uint64 `json:"icmp_rcv_total"`
+	FragEventsTotal       uint64 `json:"frag_events_total"`
+	MaxOuterIPLen         int    `json:"max_outer_ip_len"`
+}
 
 const version = "0.1.0-dev"
 
@@ -78,7 +98,7 @@ func main() {
 		<-sigCh
 	}
 
-	verdict, diagErr := readVerdict(att, cfg.PinDir)
+	verdict, obs, diagErr := readVerdict(att, cfg.PinDir)
 
 	if err := att.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: detach error: %v\n", err)
@@ -89,35 +109,40 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: diagnosis failed: %v\n", diagErr)
 		os.Exit(1)
 	}
-	fmt.Printf("verdict: %s\n", verdict.Verdict)
-	fmt.Printf("%s\n", verdict.Message)
+
+	if *jsonOut {
+		printJSON(verdict, obs, cfg.Overlay, cfg.Underlay)
+	} else {
+		fmt.Printf("verdict: %s\n", verdict.Verdict)
+		fmt.Printf("%s\n", verdict.Message)
+	}
 }
 
 // readVerdict opens the pinned maps written by the loader, builds a
 // diag.Observation from their current contents plus the live overlay/
-// underlay MTUs, and returns the resulting diagnosis.
-func readVerdict(att *loader.Attachment, pinDir string) (diag.Diagnosis, error) {
+// underlay MTUs, and returns the resulting diagnosis and the raw observation.
+func readVerdict(att *loader.Attachment, pinDir string) (diag.Diagnosis, diag.Observation, error) {
 	reader, err := bpfmap.OpenPinned(pinDir)
 	if err != nil {
-		return diag.Diagnosis{}, fmt.Errorf("open pinned maps: %w", err)
+		return diag.Diagnosis{}, diag.Observation{}, fmt.Errorf("open pinned maps: %w", err)
 	}
 	defer reader.Close()
 
 	ptbTotal, err := reader.PTBIngressTotal()
 	if err != nil {
-		return diag.Diagnosis{}, fmt.Errorf("read ptb_ingress_total: %w", err)
+		return diag.Diagnosis{}, diag.Observation{}, fmt.Errorf("read ptb_ingress_total: %w", err)
 	}
 	icmpTotal, err := reader.ICMPRcvTotal()
 	if err != nil {
-		return diag.Diagnosis{}, fmt.Errorf("read icmp_rcv_total: %w", err)
+		return diag.Diagnosis{}, diag.Observation{}, fmt.Errorf("read icmp_rcv_total: %w", err)
 	}
 	flows, err := reader.FlowState()
 	if err != nil {
-		return diag.Diagnosis{}, fmt.Errorf("read flow_state: %w", err)
+		return diag.Diagnosis{}, diag.Observation{}, fmt.Errorf("read flow_state: %w", err)
 	}
 	fragVal, err := reader.FragEventsTotal()
 	if err != nil {
-		return diag.Diagnosis{}, fmt.Errorf("read frag_events_total: %w", err)
+		return diag.Diagnosis{}, diag.Observation{}, fmt.Errorf("read frag_events_total: %w", err)
 	}
 
 	var maxOuterIPLen int
@@ -140,5 +165,36 @@ func readVerdict(att *loader.Attachment, pinDir string) (diag.Diagnosis, error) 
 		OverlayMTU:      overlayMTU,
 		FragEventsTotal: fragVal.Total,
 	}
-	return diag.Diagnose(obs), nil
+	return diag.Diagnose(obs), obs, nil
+}
+
+// printJSON emits a machine-readable JSON report on stdout. All diagnostic
+// counters and MTU values from the observation window are included so
+// consumers can derive their own logic without re-parsing human-readable text.
+func printJSON(verdict diag.Diagnosis, obs diag.Observation, overlayIface, underlayIface string) {
+	r := jsonReport{
+		Verdict:         string(verdict.Verdict),
+		Message:         verdict.Message,
+		Overlay:         overlayIface,
+		Underlay:        underlayIface,
+		OverlayMTU:      obs.OverlayMTU,
+		UnderlayMTU:     obs.UnderlayMTU,
+		PTBIngressTotal: obs.PTBIngressTotal,
+		ICMPRcvTotal:    obs.ICMPRcvTotal,
+		FragEventsTotal: obs.FragEventsTotal,
+		MaxOuterIPLen:   obs.MaxOuterIPLen,
+	}
+	// Compute recommended_overlay_mtu when the current config is unsafe.
+	if obs.UnderlayMTU > 0 && obs.OverlayMTU > 0 {
+		check := diag.CheckMTU(obs.OverlayMTU, obs.UnderlayMTU)
+		if !check.Correct {
+			r.RecommendedOverlayMTU = obs.UnderlayMTU - diag.VXLANOverheadBytes
+		}
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: json marshal failed: %v\n", err)
+		return
+	}
+	fmt.Printf("%s\n", b)
 }
