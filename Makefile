@@ -44,7 +44,7 @@ endif
 CFLAGS_BPF_KPROBE := $(CFLAGS_BPF) $(_TARGET_ARCH_DEFINE)
 
 .PHONY: all build bpf bpf-check generate lint vet \
-        lab-up lab-down smoke-small smoke-large \
+        lab-up lab-down smoke-small smoke-large scenarios cleanup-bpf \
         attach-bpf check-symbols clean help
 
 all: build
@@ -120,6 +120,43 @@ smoke-small:
 smoke-large:
 	bash scripts/smoke-large-traffic.sh
 
+# Run all four diagnostic scenarios in Docker (requires Docker + privileged mode).
+# Builds BPF objects inside the container; uses the pre-compiled Go binary at
+# BINARY (default: dist/vxlan-tracer-linux-arm64). See docs/reproducibility.md.
+scenarios:
+	@if [ -z "$(BINARY)" ]; then \
+	    echo "ERROR: set BINARY=/path/to/vxlan-tracer-linux-arm64"; exit 1; fi
+	docker run --rm --privileged \
+	    -v "$(CURDIR)":/work \
+	    -v "$(BINARY)":"$(BINARY)" \
+	    ubuntu:22.04 bash -c " \
+	        export DEBIAN_FRONTEND=noninteractive; \
+	        apt-get update -qq; \
+	        apt-get install -y -qq clang llvm libbpf-dev linux-libc-dev \
+	            iproute2 iputils-ping iptables python3 python3-scapy > /dev/null 2>&1; \
+	        cd /work; \
+	        mkdir -p /tmp/bpfobjs; \
+	        clang -O2 -g -target bpf -I/usr/include -I/usr/include/aarch64-linux-gnu \
+	            -Wall -Wno-unused-value -Wno-pointer-sign \
+	            -c bpf/tc_ingress_eth0.bpf.c -o /tmp/bpfobjs/tc_ingress_eth0.bpf.o; \
+	        clang -O2 -g -target bpf -I/usr/include -I/usr/include/aarch64-linux-gnu \
+	            -Wall -Wno-unused-value -Wno-pointer-sign \
+	            -c bpf/tc_egress_vxlan0.bpf.c -o /tmp/bpfobjs/tc_egress_vxlan0.bpf.o; \
+	        clang -O2 -g -target bpf -I/usr/include -I/usr/include/aarch64-linux-gnu \
+	            -D__TARGET_ARCH_arm64 -Wall -Wno-unused-value -Wno-pointer-sign \
+	            -c bpf/kprobes.bpf.c -o /tmp/bpfobjs/kprobes.bpf.o; \
+	        clang -O2 -g -target bpf -I/usr/include -I/usr/include/aarch64-linux-gnu \
+	            -D__TARGET_ARCH_arm64 -Wall -Wno-unused-value -Wno-pointer-sign \
+	            -c bpf/frag_kprobes.bpf.c -o /tmp/bpfobjs/frag_kprobes.bpf.o; \
+	        bash scripts/setup-bpf-fs.sh; \
+	        chmod +x '$(BINARY)'; \
+	        BINARY='$(BINARY)' BPF_DIR=/tmp/bpfobjs DURATION=15s \
+	            bash scripts/run-scenarios.sh; \
+	    "
+
+cleanup-bpf:
+	sudo bash scripts/cleanup-bpf.sh
+
 # --- Kernel symbol check (Linux only) ---
 check-symbols:
 	@echo "Checking required kernel symbols..."
@@ -142,5 +179,7 @@ help:
 	@echo "  lab-down      Tear down lab"
 	@echo "  smoke-small   Small traffic test"
 	@echo "  smoke-large   Large traffic test"
+	@echo "  scenarios     Run 4 end-to-end diagnostic scenarios in Docker (set BINARY=)"
+	@echo "  cleanup-bpf   Remove TC filters and pinned maps (idempotent)"
 	@echo "  check-symbols Verify kernel symbols in /proc/kallsyms"
 	@echo "  clean         Remove build artifacts"
