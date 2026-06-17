@@ -262,3 +262,85 @@ than assuming they match the file name, and use those in the loader's
 | Go loader can attach TC ingress/egress + kprobe + pin maps | live attach, `tc filter show`, `ls /sys/fs/bpf/...` | **CONFIRMED** (Day 5) |
 | Go CLI reads pinned maps and prints correct verdict | PTB_DELIVERED and PTB_SUPPRESSED both proven live | **CONFIRMED** (Day 5) |
 | bpftrace can read skb->dev->name in kprobe | Not verified (bpftrace broken on linuxkit) | Unknown |
+
+## Day 6 findings (Docker linuxkit 6.10.14-linuxkit aarch64)
+
+### Finding 18: ip_do_fragment attaches via cilium/ebpf link.Kprobe() on kernel 6.10.14
+
+`link.Kprobe("ip_do_fragment", prog)` returns a valid link with no error. The symbol
+was already confirmed as T (kprobeable) in Day 2 via /proc/kallsyms; Day 6 confirms
+the full loader path works end-to-end: load BPF object → get program by name → attach
+kprobe → pin map → read map from Go. No libbpf version mismatch needed (cilium/ebpf
+handles BTF relocation internally).
+
+### Finding 19: -D__TARGET_ARCH_arm64 is required for any frag_kprobes.bpf.c that uses PT_REGS_PARM*
+
+When `frag_kprobes.bpf.c` uses `PT_REGS_PARM3(ctx)` (to read the skb argument),
+clang requires `-D__TARGET_ARCH_arm64` on aarch64 to resolve the macro. Without it:
+```
+bpf/frag_kprobes.bpf.c:93:42: error: Must specify a BPF target arch via __TARGET_ARCH_xxx
+```
+The count-only version (commit 2) compiled without this flag because it did not use any
+`PT_REGS_PARM*` macros. As soon as argument access was added (commit 7), the flag became
+mandatory. Lesson: add `-D__TARGET_ARCH_arm64` to any BPF compile command that may
+acquire argument access in the future; it is harmless when the macros are not used.
+
+### Finding 20: CO-RE sk_buff.len relocation resolves correctly from linuxkit BTF
+
+`BPF_CORE_READ(skb, len)` with a partial `struct sk_buff { unsigned int len; }
+__attribute__((preserve_access_index))` resolves successfully at load time from
+`/sys/kernel/btf/vmlinux` on kernel 6.10.14-linuxkit. The program loaded without
+CO-RE relocation error (evidenced by the binary printing a verdict rather than an
+error). This confirms that the same CO-RE pattern used in kprobes.bpf.c (sk_buff
+type=3/code=4 filtering, Day 5) also works for ip_do_fragment skb->len reading.
+
+### Finding 21: ip_do_fragment fires in both the sending and receiving namespace
+
+For each large VXLAN ping, ip_do_fragment is called once in the sending netns
+(outer packet exceeds underlay MTU → fragment before forwarding) and once in the
+receiving netns (ICMP echo reply also exceeds underlay MTU on the return path).
+3 large pings from ns1 to ns2 produced 6 ip_do_fragment events total (3 send + 3
+reply). The kprobe is global (not namespace-scoped), so this behavior is inherent.
+The verdict message correctly says "at least one outgoing IP packet" rather than
+claiming to count per-flow or per-direction.
+
+### Finding 22: TC filter "file exists" error when binary is restarted in same container
+
+When the Go binary exits, it detaches kprobes (`att.Close()` calls `fragKprobeLink.Close()`
+and `kprobeLink.Close()`) but deliberately leaves TC filters in place. If the binary is
+invoked a second time in the same container without tearing down the network namespace,
+the second attempt to add a TC clsact qdisc/filter on veth1/vxlan0 fails with:
+```
+attach tc ingress on veth1: file exists
+```
+This is by design (TC filter persistence allows map reading after binary exit), but
+it means sequential test runs in the same container require either: (a) explicit
+teardown/setup of the netns between runs, or (b) use of separate Docker containers
+(as done for the commit 9 JSON tests). Documented; not a bug.
+
+## Updated hook confidence table (post-Day 6)
+
+| Hook | Verified how | Confidence |
+|------|-------------|------------|
+| ip_do_fragment symbol present on 6.10.14 | /proc/kallsyms confirmed | **CONFIRMED** |
+| ip_do_fragment fires for DF=0 oversized outer | ftrace kprobe: 20 events/10 pings (Day 2) | **CONFIRMED** |
+| ip_do_fragment fires for stale-MTU scenario | ftrace kprobe: 6 events/3 pings (Day 2/5) | **CONFIRMED** |
+| ip_do_fragment not inlined on 6.10.14 | ftrace fires at +0x0 | **CONFIRMED** |
+| ip_do_fragment kprobe via cilium/ebpf loader | link.Kprobe() success; map pinned | **CONFIRMED** (Day 6) |
+| ip_do_fragment kprobe counter increments for large traffic | frag_events_total=6 for 3 large pings | **CONFIRMED** (Day 6) |
+| ip_do_fragment CO-RE skb->len read resolves from linuxkit BTF | binary loaded without CO-RE error; correct verdict | **CONFIRMED** (Day 6) |
+| icmp_send NOT a T symbol on 6.10.14 | /proc/kallsyms negative | **CONFIRMED** |
+| icmp_rcv IS a T symbol on 6.10.14 | /proc/kallsyms confirmed Day 2 | **CONFIRMED** |
+| icmp_rcv attaches via libbpf kprobe | bpftool: id 182, jited 192B | **CONFIRMED** |
+| icmp_rcv fires AFTER netfilter INPUT | counter experiment: unsuppressed=5/5 | **CONFIRMED** |
+| iptables DROP before icmp_rcv | counter experiment: suppressed=5/0, drops=5 | **CONFIRMED** |
+| PTB suppression detectable: TC>0 + icmp_rcv==0 | both probes running; lab proven | **CONFIRMED** |
+| BTF vmlinux present on linuxkit | file size 6.2MB confirmed | **CONFIRMED** |
+| TC egress vxlan0 fires before VXLAN encap | flow_state populated; max_outer_ip_len=1478 | **CONFIRMED** |
+| TC ingress eth0 fires before netfilter | ptb_count=5 after 5 synthetic PTBs | **CONFIRMED** |
+| icmp_rcv kprobe filters type=3 code=4 only | CO-RE skb parse; 0/5 for ping/PTB resp. | **CONFIRMED** (Day 5) |
+| Go loader can attach TC ingress/egress + kprobe + pin maps | live attach, tc filter show, ls bpffs | **CONFIRMED** (Day 5) |
+| Go CLI reads pinned maps and prints correct verdict | PTB_DELIVERED and PTB_SUPPRESSED proven live | **CONFIRMED** (Day 5) |
+| VXLAN_FRAGMENTATION_OBSERVED verdict driven by BPF counter | frag_events_total=6, verdict correct | **CONFIRMED** (Day 6) |
+| JSON output correct for both frag and PTB paths | two separate Docker containers; exit 0 | **CONFIRMED** (Day 6) |
+| bpftrace can read skb->dev->name in kprobe | Not verified (bpftrace broken on linuxkit) | Unknown |

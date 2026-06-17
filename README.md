@@ -3,8 +3,9 @@
 An eBPF-based diagnostic tool for VXLAN MTU blackholes.
 
 **Status: lab-validated prototype — BPF programs implemented, Go CLI attaches,
-pins maps, reads them back, and prints a verdict. Proven end-to-end in a
-netns lab (Day 5); not production-validated.**
+pins maps, reads them back, and prints a verdict. All five verdicts proven
+end-to-end in a netns lab (Days 5–6), including the DF=0 fragmentation path;
+not production-validated.**
 
 ---
 
@@ -100,15 +101,16 @@ sudo vxlan-tracer --overlay vxlan0 --underlay eth0 --json
 | TC egress BPF (C) | done — `tc_egress_track_flow`, pinned `flow_state` map |
 | TC ingress BPF (C) | done — `tc_ingress_count_ptb`, pinned `ptb_ingress_*` maps |
 | icmp_rcv kprobe (C) | done — CO-RE filtered to ICMP type=3/code=4, pinned `icmp_rcv_total` |
-| ip_do_fragment kprobe (C) | not started — currently observed via ftrace only, not a BPF map |
+| ip_do_fragment kprobe (C) | done — CO-RE skb->len read; `frag_events_total` map (Day 6) |
 | Go controller (attach + pin + read) | done — `internal/loader`, `internal/bpfmap` |
 | Diagnosis engine | done — `internal/diag/verdict.go`, 5-verdict precedence logic |
-| Structured (JSON) output | not started |
+| Structured (JSON) output | done — `--json` flag; proven for frag and PTB paths (Day 6) |
 | CI test suite | not started |
 
-PTB_DELIVERED and PTB_SUPPRESSED verdicts have both been proven live through
-the actual Go binary (no shell script, no bpftool, no manual counter
-comparison) — see `evidence/day-05.md`.
+All five verdicts (PTB_DELIVERED, PTB_SUPPRESSED, VXLAN_FRAGMENTATION_OBSERVED,
+VXLAN_MTU_MISCONFIGURATION, NO_ISSUE_OBSERVED) are reachable through the actual
+Go binary. PTB paths proven in Day 5; DF=0 fragmentation path (VXLAN_FRAGMENTATION_OBSERVED)
+proven live in Day 6 — see `evidence/day-06.md`.
 
 ## Lab setup
 

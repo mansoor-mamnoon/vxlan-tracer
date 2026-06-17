@@ -32,12 +32,14 @@ namespace environment. No production deployment required.
 - [x] Diagnosis engine: MTU arithmetic + suppression detection (Go CLI, internal/diag/verdict.go) (Day 5)
 - [x] End-to-end Go CLI verdict proven live: PTB_DELIVERED and PTB_SUPPRESSED both observed
       through the actual binary, not a shell script (Day 5)
-- [ ] Structured (JSON) output
+- [x] Structured (JSON) output — `--json` flag; proven live for frag and PTB paths (Day 6)
+- [x] ip_do_fragment observed through BPF map data rather than ftrace only (Day 6)
+       NOTE: frag_events_total=6 for 3 large pings proven live; CO-RE skb->len read confirmed
+       NOTE: VXLAN_FRAGMENTATION_OBSERVED verdict driven by BPF counter, not ftrace
 - [ ] `make smoke-small` and `make smoke-large` passing end-to-end with BPF loaded
 - [ ] bpftrace ip_do_fragment.bt executed with field output (needs Lima VM + bpftrace 0.16+)
-- [ ] ip_do_fragment observed through BPF map data rather than ftrace only (Day 6)
 - [ ] Single polished `vxlan-tracer run` top-level command (current binary already does this;
-      needs subcommand/flag cleanup and a documented exit-code contract) (Day 6)
+      needs subcommand/flag cleanup and a documented exit-code contract) (Day 7)
 
 ### V0 scope limitations
 

@@ -440,3 +440,123 @@ CLI binary: attach, observe, read pinned maps, diagnose, print verdict, detach.
 **Caveat:** Suppression mechanism tested was iptables DROP only; other mechanisms (nftables,
 conntrack, security modules) not tested. See evidence/day-05-unsuppressed-go.md and
 evidence/day-05-suppressed-go.md.
+
+---
+
+## 2026-06-14/16 — ip_do_fragment kprobe attach via Go loader — Day 6 commit 3
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64, Go binary cross-compiled macOS→linux/arm64
+**Command:**
+```sh
+nsenter --net=/var/run/netns/ns1 -- vxlan-tracer-linux-arm64 \
+  --overlay vxlan0 --underlay veth1 --pin-dir /sys/fs/bpf/vxlan-tracer \
+  --bpf-dir /tmp/bpfobjs --duration 10s
+ls /sys/fs/bpf/vxlan-tracer/
+```
+**Expected:** Binary outputs "kprobe/ip_do_fragment" in attach line; `frag_events_total` present in bpffs
+**Actual:**
+```
+attached: tc ingress, tc egress, kprobe/icmp_rcv, kprobe/ip_do_fragment; maps pinned under /sys/fs/bpf/vxlan-tracer
+detached kprobes (TC filters remain attached; maps remain pinned)
+/sys/fs/bpf/vxlan-tracer/: flow_state  frag_events_total  icmp_rcv_total  ptb_ingress_counts  ptb_ingress_total
+```
+**Result:** PASS — cilium/ebpf link.Kprobe("ip_do_fragment", prog) succeeds on this kernel
+**Caveat:** See evidence/day-06-loader-frag-attach.md.
+
+---
+
+## 2026-06-14/16 — small traffic: frag_events_total = 0 — Day 6 commit 5
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64
+**Command:**
+```sh
+# vxlan-tracer running in background with --duration 30s
+ip netns exec ns1 ping -c 5 -s 40 10.244.0.2
+```
+**Expected:** frag_events_total stays at 0 for small pings (outer IP ~118B << 1400B underlay MTU)
+**Actual:**
+```
+verdict: VXLAN_MTU_MISCONFIGURATION
+(frag_events_total = 0; fall-through to static MTU check)
+```
+Exit code 0.
+**Result:** PASS — ip_do_fragment counter stays at 0 for traffic that fits within underlay MTU
+**Caveat:** frag_events_total value not directly printed in human-readable output; inferred from
+verdict fall-through. Confirmed directly in JSON output (commit 9): `"frag_events_total":0`.
+See evidence/day-06-frag-small.md.
+
+---
+
+## 2026-06-14/16 — large traffic: VXLAN_FRAGMENTATION_OBSERVED confirmed — Day 6 commit 8
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64
+**Command:**
+```sh
+nsenter --net=/var/run/netns/ns1 -- vxlan-tracer-linux-arm64 \
+  --overlay vxlan0 --underlay veth1 --pin-dir /sys/fs/bpf/vxlan-tracer \
+  --bpf-dir /tmp/bpfobjs --duration 30s &
+ip netns exec ns1 ping -c 3 -s 1360 10.244.0.2
+```
+**Expected:** frag_events_total = 6 (3 pings × 2 directions); verdict VXLAN_FRAGMENTATION_OBSERVED
+**Actual:**
+```
+verdict: VXLAN_FRAGMENTATION_OBSERVED
+6 ip_do_fragment invocation(s) were observed while vxlan-tracer was attached. The kernel
+fragmented at least one outgoing IP packet. In the stale-MTU VXLAN scenario this indicates
+that outer VXLAN packets exceed the underlay MTU (1400) and are being fragmented rather than
+dropped. Fragmented VXLAN UDP is commonly dropped silently by cloud fabric; in a local lab
+fragments may reassemble — fragmentation observed here does not by itself confirm packet loss.
+```
+Exit code 0.
+**Result:** PASS — primary Day 6 success condition met
+**Caveat:** In-lab fragments reassemble (0% loss for large pings). The blackhole condition
+(cloud fabric dropping fragmented UDP) is not reproduced but also not claimed.
+CO-RE sk_buff.len relocation resolved correctly from /sys/kernel/btf/vmlinux.
+Both ip_do_fragment kprobe attach (commit 3) and CO-RE skb->len read (commit 7)
+proven in this test by the binary loading without error.
+
+---
+
+## 2026-06-14/16 — JSON output mode: fragmentation case — Day 6 commit 9
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64
+**Command:**
+```sh
+nsenter --net=/var/run/netns/ns1 -- vxlan-tracer-linux-arm64 \
+  --overlay vxlan0 --underlay veth1 --pin-dir /sys/fs/bpf/vxlan-tracer \
+  --bpf-dir /tmp/bpfobjs --duration 20s --json &
+# Wait 3s, then:
+ip netns exec ns1 ping -c 3 -s 1360 10.244.0.2
+```
+**Expected:** Single JSON line on stdout with verdict=VXLAN_FRAGMENTATION_OBSERVED, frag_events_total=6, recommended_overlay_mtu=1350
+**Actual:**
+```json
+{"verdict":"VXLAN_FRAGMENTATION_OBSERVED","message":"6 ip_do_fragment invocation(s) were observed while vxlan-tracer was attached. The kernel fragmented at least one outgoing IP packet. In the stale-MTU VXLAN scenario this indicates that outer VXLAN packets exceed the underlay MTU (1400) and are being fragmented rather than dropped. Fragmented VXLAN UDP is commonly dropped silently by cloud fabric; in a local lab fragments may reassemble — fragmentation observed here does not by itself confirm packet loss.","overlay":"vxlan0","underlay":"veth1","overlay_mtu":1450,"underlay_mtu":1400,"recommended_overlay_mtu":1350,"ptb_ingress_total":0,"icmp_rcv_total":0,"frag_events_total":6,"max_outer_ip_len":1438}
+```
+Exit code 0.
+**Result:** PASS
+**Caveat:** None.
+
+---
+
+## 2026-06-14/16 — JSON output mode: PTB suppressed case — Day 6 commit 9
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64 (separate container from fragmentation test)
+**Command:**
+```sh
+ip netns exec ns1 iptables -A INPUT -p icmp --icmp-type 3/4 -j DROP
+nsenter --net=/var/run/netns/ns1 -- vxlan-tracer-linux-arm64 \
+  --overlay vxlan0 --underlay veth1 --pin-dir /sys/fs/bpf/vxlan-tracer \
+  --bpf-dir /tmp/bpfobjs --duration 20s --json &
+# Wait 3s, then:
+ip netns exec ns2 python3 spikes/inject_ptb.py \
+  --src 192.168.100.2 --dst 192.168.100.1 --dev veth2 --next-hop-mtu 1400 --count 5
+```
+**Expected:** JSON with verdict=PTB_SUPPRESSED, ptb_ingress_total=5, icmp_rcv_total=0
+**Actual:**
+```json
+{"verdict":"PTB_SUPPRESSED","message":"5 ICMP type=3/code=4 packet(s) were observed at TC ingress, but 0 reached icmp_rcv: something between the NIC and icmp_rcv — commonly a netfilter/iptables DROP rule — is suppressing PTBs before the kernel can act on them.","overlay":"vxlan0","underlay":"veth1","overlay_mtu":1450,"underlay_mtu":1400,"recommended_overlay_mtu":1350,"ptb_ingress_total":5,"icmp_rcv_total":0,"frag_events_total":0,"max_outer_ip_len":0}
+```
+Exit code 0.
+**Result:** PASS — JSON mode works for the PTB suppression path; regression confirmed
+**Caveat:** Separate container required to avoid "TC filter file exists" error from prior run.
