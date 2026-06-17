@@ -223,3 +223,80 @@ func (r *PinnedReader) Close() {
 	r.flowState.Close()
 	r.fragTotal.Close()
 }
+
+// ClearPinned zeroes all five pinned vxlan-tracer maps so that counters from
+// a previous run do not affect the current run's verdict.
+//
+// ARRAY maps (ptb_ingress_total, icmp_rcv_total, frag_events_total) are
+// reset by writing a zero value at key 0. HASH maps (ptb_ingress_counts,
+// flow_state) are flushed by collecting all existing keys and deleting them.
+//
+// This is called at the start of each binary invocation after BPF programs
+// are attached and maps are pinned. Use --no-clear to skip clearing.
+func ClearPinned(pinDir string) error {
+	r, err := OpenPinned(pinDir)
+	if err != nil {
+		return fmt.Errorf("clear maps: %w", err)
+	}
+	defer r.Close()
+
+	// Reset ARRAY counters to zero.
+	if err := r.ptbTotal.Update(uint32(0), uint64(0), ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("clear ptb_ingress_total: %w", err)
+	}
+	if err := r.icmpRcvTotal.Update(uint32(0), uint64(0), ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("clear icmp_rcv_total: %w", err)
+	}
+	zeroFrag := PinnedFragVal{}
+	if err := r.fragTotal.Update(uint32(0), &zeroFrag, ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("clear frag_events_total: %w", err)
+	}
+
+	// Flush HASH maps: collect all keys first, then delete (modifying a map
+	// while iterating it is not safe in cilium/ebpf).
+	if err := flushPTBCounts(r.ptbCounts); err != nil {
+		return fmt.Errorf("clear ptb_ingress_counts: %w", err)
+	}
+	if err := flushFlowState(r.flowState); err != nil {
+		return fmt.Errorf("clear flow_state: %w", err)
+	}
+	return nil
+}
+
+func flushPTBCounts(m *ebpf.Map) error {
+	var keys []PinnedPTBKey
+	var key PinnedPTBKey
+	var val PinnedPTBVal
+	it := m.Iterate()
+	for it.Next(&key, &val) {
+		keys = append(keys, key)
+	}
+	if err := it.Err(); err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if err := m.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func flushFlowState(m *ebpf.Map) error {
+	var keys []PinnedFlowKey
+	var key PinnedFlowKey
+	var val PinnedFlowVal
+	it := m.Iterate()
+	for it.Next(&key, &val) {
+		keys = append(keys, key)
+	}
+	if err := it.Err(); err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if err := m.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}

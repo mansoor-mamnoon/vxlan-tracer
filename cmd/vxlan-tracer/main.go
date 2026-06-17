@@ -18,8 +18,8 @@ import (
 // jsonReport is the structure emitted when --json is passed. Field names are
 // snake_case to match common CLI/API conventions. All counter fields are
 // unsigned ints so the consumer can reliably check > 0 without sign concerns.
-// recommended_overlay_mtu is 0 when the current overlay MTU is already safe
-// or when MTU data was unavailable.
+// Fields with omitempty are omitted when zero (recommended_overlay_mtu when
+// the config is already safe; frag_max_skb_len when no fragmentation was seen).
 type jsonReport struct {
 	Verdict               string `json:"verdict"`
 	Message               string `json:"message"`
@@ -31,6 +31,7 @@ type jsonReport struct {
 	PTBIngressTotal       uint64 `json:"ptb_ingress_total"`
 	ICMPRcvTotal          uint64 `json:"icmp_rcv_total"`
 	FragEventsTotal       uint64 `json:"frag_events_total"`
+	FragMaxSKBLen         uint32 `json:"frag_max_skb_len,omitempty"`
 	MaxOuterIPLen         int    `json:"max_outer_ip_len"`
 }
 
@@ -42,12 +43,12 @@ func main() {
 	vxlanPort := flag.Uint("vxlan-port", 4789, "VXLAN UDP destination port")
 	pinDir := flag.String("pin-dir", "/sys/fs/bpf/vxlan-tracer", "bpffs directory to pin maps under (must exist; see scripts/setup-bpf-fs.sh)")
 	bpfDir := flag.String("bpf-dir", "bpf", "directory containing compiled tc_ingress_eth0.bpf.o, tc_egress_vxlan0.bpf.o, kprobes.bpf.o")
-	duration := flag.Duration("duration", 0, "Run for this long then exit (0 = run until interrupted)")
+	duration := flag.Duration("duration", 0, "Run for this long then exit (0 = run until SIGINT/SIGTERM)")
 	jsonOut := flag.Bool("json", false, "Emit newline-delimited JSON instead of human-readable output")
+	noClear := flag.Bool("no-clear", false, "Skip clearing pinned map counters at start of run (default: clear for fresh baseline)")
 	verbose := flag.Bool("v", false, "Print all flow events, not just findings")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	_ = vxlanPort
-	_ = jsonOut
 	_ = verbose
 
 	flag.Parse()
@@ -60,7 +61,7 @@ func main() {
 	if *overlay == "" || *underlay == "" {
 		fmt.Fprintln(os.Stderr, "error: --overlay and --underlay are required")
 		fmt.Fprintln(os.Stderr, "usage: vxlan-tracer --overlay <iface> --underlay <iface> [flags]")
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	cfg := loader.Config{
@@ -82,9 +83,21 @@ func main() {
 	att, err := loader.Attach(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: attach failed: %v\n", err)
-		os.Exit(1)
+		os.Exit(2)
 	}
 	fmt.Fprintln(os.Stderr, "attached: tc ingress, tc egress, kprobe/icmp_rcv, kprobe/ip_do_fragment; maps pinned under "+cfg.PinDir)
+
+	// Clear map counters so this run starts from a known-zero baseline.
+	// Without this, stale counters from a prior run accumulate across reruns.
+	if !*noClear {
+		if err := bpfmap.ClearPinned(cfg.PinDir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: map clear failed: %v\n", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "maps cleared: fresh baseline for this run")
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "maps NOT cleared (--no-clear): counters may include prior-run data")
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -107,7 +120,7 @@ func main() {
 
 	if diagErr != nil {
 		fmt.Fprintf(os.Stderr, "error: diagnosis failed: %v\n", diagErr)
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	if *jsonOut {
@@ -164,6 +177,7 @@ func readVerdict(att *loader.Attachment, pinDir string) (diag.Diagnosis, diag.Ob
 		UnderlayMTU:     underlayMTU,
 		OverlayMTU:      overlayMTU,
 		FragEventsTotal: fragVal.Total,
+		FragMaxSKBLen:   fragVal.MaxSKBLen,
 	}
 	return diag.Diagnose(obs), obs, nil
 }
@@ -182,6 +196,7 @@ func printJSON(verdict diag.Diagnosis, obs diag.Observation, overlayIface, under
 		PTBIngressTotal: obs.PTBIngressTotal,
 		ICMPRcvTotal:    obs.ICMPRcvTotal,
 		FragEventsTotal: obs.FragEventsTotal,
+		FragMaxSKBLen:   obs.FragMaxSKBLen,
 		MaxOuterIPLen:   obs.MaxOuterIPLen,
 	}
 	// Compute recommended_overlay_mtu when the current config is unsafe.
