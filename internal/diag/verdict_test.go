@@ -35,10 +35,13 @@ func TestDiagnosePTBSuppressed(t *testing.T) {
 }
 
 func TestDiagnoseFragmentationObserved(t *testing.T) {
+	// Corroborated case: both ip_do_fragment events AND oversized VXLAN traffic.
+	// This is the primary lab scenario (inner IP 1388B → outer IP 1438B > 1400B).
 	d := Diagnose(Observation{
 		PTBIngressTotal: 0,
 		ICMPRcvTotal:    0,
 		FragEventsTotal: 6,
+		MaxOuterIPLen:   1438,
 		UnderlayMTU:     1400,
 	})
 	if d.Verdict != VerdictFragmentationObserved {
@@ -50,10 +53,32 @@ func TestDiagnoseFragmentationObserved(t *testing.T) {
 	if !strings.Contains(d.Message, "1400") {
 		t.Errorf("Message does not mention underlay MTU: %s", d.Message)
 	}
-	// Must not CONFIRM packet loss or call it a blackhole — disclaiming
-	// (does not by itself confirm packet loss) is allowed and expected.
+	if !strings.Contains(d.Message, "1438") {
+		t.Errorf("Message does not mention observed outer IP len: %s", d.Message)
+	}
+	// Must not CONFIRM packet loss — disclaiming is allowed and expected.
 	if strings.Contains(d.Message, "confirms packet loss") || strings.Contains(d.Message, "blackhole confirmed") {
 		t.Errorf("Message should not confirm packet loss or blackhole: %s", d.Message)
+	}
+}
+
+func TestDiagnoseFragmentationObservedGlobalOnly(t *testing.T) {
+	// Conservative case: ip_do_fragment fired but no VXLAN-sized flow corroboration.
+	d := Diagnose(Observation{
+		PTBIngressTotal: 0,
+		ICMPRcvTotal:    0,
+		FragEventsTotal: 3,
+		MaxOuterIPLen:   0,
+		UnderlayMTU:     1400,
+	})
+	if d.Verdict != VerdictFragmentationObserved {
+		t.Errorf("Verdict = %s, want %s", d.Verdict, VerdictFragmentationObserved)
+	}
+	if !strings.Contains(d.Message, "global") {
+		t.Errorf("Message should mention global scope: %s", d.Message)
+	}
+	if strings.Contains(d.Message, "VXLAN outer packets triggering") {
+		t.Errorf("Message must not claim VXLAN causation without flow evidence: %s", d.Message)
 	}
 }
 

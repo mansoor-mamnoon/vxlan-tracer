@@ -78,10 +78,15 @@ type Observation struct {
 	// least one outgoing IP packet while vxlan-tracer was attached. In the
 	// stale-MTU topology (vxlan0 MTU stale at 1450, underlay MTU 1400) any
 	// large VXLAN packet triggers ip_do_fragment. 0 means nothing fragmented.
-	// NOTE: this counter fires for all IP fragmentation on the host, not only
-	// VXLAN outer packets — in production environments with other fragmented
-	// traffic the count may be inflated.
+	// NOTE: ip_do_fragment is a global kernel function — this counter fires for
+	// ALL outgoing IP fragmentation on the host, not only VXLAN outer packets.
+	// Use alongside MaxOuterIPLen > UnderlayMTU for stronger VXLAN attribution.
 	FragEventsTotal uint64
+
+	// FragMaxSKBLen is the maximum skb->len recorded by the ip_do_fragment
+	// kprobe (frag_events_total.max_skb_len). 0 means no fragmentation was
+	// observed or the CO-RE read returned zero.
+	FragMaxSKBLen uint32
 }
 
 // Diagnosis is the result of Diagnose: a verdict plus the explanation that
@@ -138,16 +143,41 @@ func Diagnose(obs Observation) Diagnosis {
 	}
 
 	if obs.FragEventsTotal > 0 {
+		if obs.UnderlayMTU > 0 && obs.MaxOuterIPLen > obs.UnderlayMTU {
+			// Both ip_do_fragment counter and VXLAN flow size evidence are present.
+			// This is the corroborated case: fragmentation was observed while
+			// oversized VXLAN traffic was in flight. Neither signal alone is VXLAN-
+			// specific (ip_do_fragment fires globally; flow_state may record brief
+			// spikes), but both together are strong evidence for the stale-MTU scenario.
+			return Diagnosis{
+				Verdict: VerdictFragmentationObserved,
+				Message: fmt.Sprintf(
+					"%d ip_do_fragment invocation(s) were observed while vxlan-tracer was attached; "+
+						"concurrently, the TC egress hook recorded an outer packet length of %d bytes, "+
+						"%d bytes over the underlay MTU (%d). "+
+						"Fragmentation was observed while oversized VXLAN traffic was present — "+
+						"these two signals together are consistent with VXLAN outer packets triggering "+
+						"ip_do_fragment. Note: ip_do_fragment is a global kernel function and may "+
+						"include non-VXLAN fragmentation events on a busy host. "+
+						"Fragmented VXLAN UDP is commonly dropped silently by cloud fabric; "+
+						"in a local lab fragments may reassemble — "+
+						"fragmentation observed here does not by itself confirm packet loss.",
+					obs.FragEventsTotal, obs.MaxOuterIPLen,
+					obs.MaxOuterIPLen-obs.UnderlayMTU, obs.UnderlayMTU),
+			}
+		}
+		// Fragmentation events observed but no VXLAN-sized flow corroboration.
+		// ip_do_fragment is global; treat this as a weak indicator only.
 		return Diagnosis{
 			Verdict: VerdictFragmentationObserved,
 			Message: fmt.Sprintf(
 				"%d ip_do_fragment invocation(s) were observed while vxlan-tracer was attached. "+
-					"The kernel fragmented at least one outgoing IP packet. In the stale-MTU VXLAN "+
-					"scenario this indicates that outer VXLAN packets exceed the underlay MTU (%d) "+
-					"and are being fragmented rather than dropped. Fragmented VXLAN UDP is commonly "+
-					"dropped silently by cloud fabric; in a local lab fragments may reassemble — "+
-					"fragmentation observed here does not by itself confirm packet loss.",
-				obs.FragEventsTotal, obs.UnderlayMTU),
+					"Note: ip_do_fragment is a global kernel function — the counter fires for ALL "+
+					"outgoing IP fragmentation on this host, not only VXLAN outer packets. "+
+					"No oversized VXLAN outer packet was confirmed by the TC egress flow map "+
+					"during this window; treat this as a weak indicator that fragmentation "+
+					"occurred on this host, not as direct VXLAN blackhole evidence.",
+				obs.FragEventsTotal),
 		}
 	}
 
