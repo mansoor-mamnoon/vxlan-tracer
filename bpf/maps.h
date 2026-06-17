@@ -61,3 +61,34 @@ struct flow_val {
 	__u16 max_inner_ip_len;
 	__u16 max_outer_ip_len;  /* = max_inner_ip_len + 50 */
 };
+
+/* ---- Fragmentation event counters (ip_do_fragment kprobe) ---- */
+
+/* Value for frag_events_total: single-entry ARRAY (key 0 → struct frag_val).
+ *
+ * total:        every ip_do_fragment invocation increments this.
+ * last_seen_ns: bpf_ktime_get_ns() at the most recent fragmentation event.
+ *               Populated in Day 6 commit 7 when skb field reads are added.
+ * max_skb_len:  largest skb->len (outer packet size incl. VXLAN headers) seen
+ *               across all ip_do_fragment calls.
+ *               Populated in Day 6 commit 7; 0 in the count-only phase.
+ * pad:          explicit padding to keep the struct 24 bytes and 8-byte aligned.
+ *
+ * Why struct rather than a bare u64 like icmp_rcv_total?
+ *   ip_do_fragment sees the full outer skb; recording skb->len lets us confirm
+ *   which packet sizes are triggering fragmentation, without any per-flow state.
+ *   Using a single shared record (max not per-event) keeps the map tiny and
+ *   avoids a HASH map for a diagnostic-only signal.
+ *
+ * Limitation: ip_do_fragment fires for ALL outgoing IP fragmentation on the
+ * system, not only VXLAN outer packets.  In a lab environment with only VXLAN
+ * traffic this is fine; in a production host with other fragmented traffic, the
+ * count may be inflated.  A per-device filter can be added in a later day once
+ * the count-only path is proven.
+ */
+struct frag_val {
+	__u64 total;        /* ip_do_fragment invocations observed */
+	__u64 last_seen_ns; /* ktime at most recent event (0 until commit 7) */
+	__u32 max_skb_len;  /* max skb->len seen (0 until commit 7)           */
+	__u32 pad;
+};
