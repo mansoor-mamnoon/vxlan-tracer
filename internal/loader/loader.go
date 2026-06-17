@@ -179,7 +179,21 @@ func loadPinned(objPath, progName, pinDir string, pinNames []string) (*ebpf.Coll
 
 // attachTC attaches prog as a direct-action TC BPF filter at the given
 // clsact parent (HANDLE_MIN_INGRESS or HANDLE_MIN_EGRESS) on l.
+//
+// Any existing filter at priority 1 is removed before adding the new one, so
+// re-running the binary in the same lab after a prior run's TC filters
+// persisted does not fail with EEXIST. This makes binary restarts idempotent
+// without requiring a manual cleanup step between runs.
 func attachTC(l netlink.Link, parent uint32, prog *ebpf.Program, name string) error {
+	// Delete any priority-1 filter left by a prior run before adding ours.
+	// A failure here is non-fatal: FilterAdd will still report EEXIST clearly.
+	if existing, err := netlink.FilterList(l, parent); err == nil {
+		for _, f := range existing {
+			if f.Attrs().Priority == 1 {
+				_ = netlink.FilterDel(f)
+			}
+		}
+	}
 	filter := &netlink.BpfFilter{
 		FilterAttrs: netlink.FilterAttrs{
 			LinkIndex: l.Attrs().Index,
