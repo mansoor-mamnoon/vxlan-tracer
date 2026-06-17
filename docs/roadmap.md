@@ -36,10 +36,16 @@ namespace environment. No production deployment required.
 - [x] ip_do_fragment observed through BPF map data rather than ftrace only (Day 6)
        NOTE: frag_events_total=6 for 3 large pings proven live; CO-RE skb->len read confirmed
        NOTE: VXLAN_FRAGMENTATION_OBSERVED verdict driven by BPF counter, not ftrace
-- [ ] `make smoke-small` and `make smoke-large` passing end-to-end with BPF loaded
+- [x] `make smoke-small` and `make smoke-large` passing end-to-end with BPF loaded (Day 7)
 - [ ] bpftrace ip_do_fragment.bt executed with field output (needs Lima VM + bpftrace 0.16+)
-- [ ] Single polished `vxlan-tracer run` top-level command (current binary already does this;
-      needs subcommand/flag cleanup and a documented exit-code contract) (Day 7)
+- [x] Exit-code contract: 0=verdict produced, 2=tool error; documented in docs/exit-codes.md (Day 7)
+- [x] Idempotent TC attach (FilterList+FilterDel before FilterAdd; no "file exists" on rerun) (Day 7)
+- [x] Idempotent map clearing (ClearPinned at start; --no-clear flag for debugging) (Day 7)
+- [x] Automated scenario runner: 4/4 verdicts proven in single Docker run (Day 7)
+- [x] Fragmentation verdict qualified: two-signal corroboration or conservative global disclaimer (Day 7)
+- [x] frag_max_skb_len surfaced in JSON output (Day 7)
+- [x] docs/reproducibility.md — Docker quickstart, capability requirements, known kernel behavior (Day 7)
+- [x] make scenarios target for Docker end-to-end test (Day 7)
 
 ### V0 scope limitations
 

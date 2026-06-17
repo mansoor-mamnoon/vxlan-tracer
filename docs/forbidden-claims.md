@@ -121,3 +121,43 @@ vxlan-tracer is explicitly VXLAN-only (UDP port 4789, VNI-based).
 **Why forbidden:** If a test was not run, do not write its output. If a tool
 did not produce a measurement, do not invent one. Evidence files must contain
 only actual command output from actual runs.
+
+---
+
+## 13. "All fragmentation events are VXLAN-caused"
+
+**Why forbidden:** `ip_do_fragment` is a global kernel function. It fires for
+ALL outgoing IP fragmentation on the host, not only VXLAN outer packets.
+The kprobe counter (`frag_events_total`) therefore counts all fragmentation.
+On a busy multi-purpose host, this counter will include non-VXLAN fragmentation.
+
+The verdict message must always include the global-scope disclaimer. The
+corroborated verdict (both ip_do_fragment fires AND TC egress sees oversized
+VXLAN packets) is stronger but still not definitive proof of VXLAN causation.
+
+Forbidden phrases:
+- "all frag events are VXLAN-caused"
+- "ip_do_fragment only fires for VXLAN"
+- "frag_events_total counts only VXLAN fragmentation"
+
+---
+
+## 14. "Packet loss confirmed"
+
+**Why forbidden:** In a local lab environment, fragmented UDP packets
+reassemble at the receiver. Fragmentation does not confirm packet loss.
+In cloud fabric (AWS, GCP, Azure VPC), fragmented VXLAN UDP is commonly
+silently dropped — but this tool runs on the local host and cannot observe
+remote drops.
+
+Do not claim packet loss from `frag_events_total > 0` alone.
+
+---
+
+## 15. "Idempotent across all kernel versions"
+
+**Why forbidden:** The idempotent TC attach (`FilterList+FilterDel`) and map
+clearing (`ClearPinned`) have been tested only on kernel 6.10.14-linuxkit.
+`FilterList` behavior, ARRAY map `UpdateAny` semantics, and HASH map iteration
+during flush are all kernel-implementation details. Claim only: "tested on
+6.10.14-linuxkit aarch64."

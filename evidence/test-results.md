@@ -560,3 +560,27 @@ ip netns exec ns2 python3 spikes/inject_ptb.py \
 Exit code 0.
 **Result:** PASS — JSON mode works for the PTB suppression path; regression confirmed
 **Caveat:** Separate container required to avoid "TC filter file exists" error from prior run.
+
+---
+
+## 2026-06-16 — Day 7: automated scenario runner (all 4 verdicts)
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64, --privileged
+**Command:** `BINARY=/tmp/vxlan-tracer-linux-arm64-d7 BPF_DIR=/tmp/bpfobjs DURATION=15s bash scripts/run-scenarios.sh`
+**Expected:** 4 scenarios pass with expected verdicts; all exit codes 0
+**Actual:**
+```
+Results: 4 passed, 0 failed
+run-scenarios exit: 0
+```
+
+Scenario results:
+- healthy_small → VXLAN_MTU_MISCONFIGURATION: PASS (max_outer_ip_len=118, no active fault)
+- fragmentation → VXLAN_FRAGMENTATION_OBSERVED: PASS (frag_events_total=6, max_outer_ip_len=1438)
+- ptb_delivered → PTB_DELIVERED: PASS (ptb_ingress_total=5, icmp_rcv_total=5)
+- ptb_suppressed → PTB_SUPPRESSED: PASS (ptb_ingress_total=5, icmp_rcv_total=0)
+
+Each scenario ran idempotent cleanup before setup. No "file exists" errors. No stale counters.
+**Result:** PASS (4/4)
+**Caveat:** aarch64 kernel only; fragmentation result corroborated (two-signal) because fresh cleanup
+resets route MTU cache via namespace recreation.
