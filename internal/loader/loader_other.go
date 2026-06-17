@@ -12,12 +12,13 @@ import "errors"
 // Config mirrors the Linux Config so callers can build cfg literals on any
 // platform; the fields are unused here.
 type Config struct {
-	Overlay      string
-	Underlay     string
-	PinDir       string
-	TCIngressObj string
-	TCEgressObj  string
-	KprobeObj    string
+	Overlay       string
+	Underlay      string
+	PinDir        string
+	TCIngressObj  string
+	TCEgressObj   string
+	KprobeObj     string
+	FragKprobeObj string
 }
 
 // Attachment is an empty stand-in on non-Linux platforms.

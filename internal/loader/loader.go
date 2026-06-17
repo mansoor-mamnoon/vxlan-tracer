@@ -20,30 +20,34 @@ import (
 
 // Config describes which interfaces and compiled BPF objects to attach.
 type Config struct {
-	Overlay      string // VXLAN overlay interface, e.g. vxlan0
-	Underlay     string // Underlay physical interface, e.g. eth0
-	PinDir       string // bpffs directory for pinned maps, e.g. /sys/fs/bpf/vxlan-tracer
-	TCIngressObj string // compiled tc_ingress_eth0.bpf.o path
-	TCEgressObj  string // compiled tc_egress_vxlan0.bpf.o path
-	KprobeObj    string // compiled kprobes.bpf.o path
+	Overlay         string // VXLAN overlay interface, e.g. vxlan0
+	Underlay        string // Underlay physical interface, e.g. eth0
+	PinDir          string // bpffs directory for pinned maps, e.g. /sys/fs/bpf/vxlan-tracer
+	TCIngressObj    string // compiled tc_ingress_eth0.bpf.o path
+	TCEgressObj     string // compiled tc_egress_vxlan0.bpf.o path
+	KprobeObj       string // compiled kprobes.bpf.o path
+	FragKprobeObj   string // compiled frag_kprobes.bpf.o path (ip_do_fragment counter)
 }
 
 // Attachment holds everything attached by Attach, for cleanup via Close.
 type Attachment struct {
-	ingressColl *ebpf.Collection
-	egressColl  *ebpf.Collection
-	kprobeColl  *ebpf.Collection
-	kprobeLink  link.Link
-	underlay    netlink.Link
-	overlay     netlink.Link
+	ingressColl    *ebpf.Collection
+	egressColl     *ebpf.Collection
+	kprobeColl     *ebpf.Collection
+	kprobeLink     link.Link
+	fragKprobeColl *ebpf.Collection
+	fragKprobeLink link.Link
+	underlay       netlink.Link
+	overlay        netlink.Link
 }
 
 // pinnedMaps lists, per BPF object, which map names should be pinned under
 // Config.PinDir. Maps not listed here are still created but not pinned.
 var pinnedMaps = map[string][]string{
-	"ingress": {"ptb_ingress_counts", "ptb_ingress_total"},
-	"egress":  {"flow_state"},
-	"kprobe":  {"icmp_rcv_total"},
+	"ingress":    {"ptb_ingress_counts", "ptb_ingress_total"},
+	"egress":     {"flow_state"},
+	"kprobe":     {"icmp_rcv_total"},
+	"fragkprobe": {"frag_events_total"},
 }
 
 // Attach loads the three compiled BPF objects, attaches them to the
@@ -106,6 +110,19 @@ func Attach(cfg Config) (*Attachment, error) {
 		return nil, fmt.Errorf("attach kprobe icmp_rcv: %w", err)
 	}
 	a.kprobeLink = kp
+
+	fragColl, fragProg, err := loadPinned(cfg.FragKprobeObj, "kprobe_ip_do_fragment", cfg.PinDir, pinnedMaps["fragkprobe"])
+	if err != nil {
+		a.Close()
+		return nil, fmt.Errorf("load frag kprobe object %s: %w", cfg.FragKprobeObj, err)
+	}
+	a.fragKprobeColl = fragColl
+	fkp, err := link.Kprobe("ip_do_fragment", fragProg, nil)
+	if err != nil {
+		a.Close()
+		return nil, fmt.Errorf("attach kprobe ip_do_fragment: %w", err)
+	}
+	a.fragKprobeLink = fkp
 
 	return a, nil
 }
@@ -194,14 +211,22 @@ func (a *Attachment) MTUs() (overlayMTU, underlayMTU int, err error) {
 	return o.Attrs().MTU, u.Attrs().MTU, nil
 }
 
-// Close detaches the kprobe (which has no persistence outside this
+// Close detaches the kprobes (which have no persistence outside this
 // process) and closes all collection file descriptors. TC filters survive
 // Close, matching the existing shell-attach behavior documented in
 // docs/map-lifecycle.md: TC filters persist on the qdisc once attached;
-// only the kprobe link needs an explicit owner to stay alive. Pinned maps
+// only the kprobe links need an explicit owner to stay alive. Pinned maps
 // are not removed — they are meant to outlive the loader process.
 func (a *Attachment) Close() error {
 	var firstErr error
+	if a.fragKprobeLink != nil {
+		if err := a.fragKprobeLink.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if a.fragKprobeColl != nil {
+		a.fragKprobeColl.Close()
+	}
 	if a.kprobeLink != nil {
 		if err := a.kprobeLink.Close(); err != nil && firstErr == nil {
 			firstErr = err

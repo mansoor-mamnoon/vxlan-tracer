@@ -44,12 +44,13 @@ func main() {
 	}
 
 	cfg := loader.Config{
-		Overlay:      *overlay,
-		Underlay:     *underlay,
-		PinDir:       *pinDir,
-		TCIngressObj: filepath.Join(*bpfDir, "tc_ingress_eth0.bpf.o"),
-		TCEgressObj:  filepath.Join(*bpfDir, "tc_egress_vxlan0.bpf.o"),
-		KprobeObj:    filepath.Join(*bpfDir, "kprobes.bpf.o"),
+		Overlay:       *overlay,
+		Underlay:      *underlay,
+		PinDir:        *pinDir,
+		TCIngressObj:  filepath.Join(*bpfDir, "tc_ingress_eth0.bpf.o"),
+		TCEgressObj:   filepath.Join(*bpfDir, "tc_egress_vxlan0.bpf.o"),
+		KprobeObj:     filepath.Join(*bpfDir, "kprobes.bpf.o"),
+		FragKprobeObj: filepath.Join(*bpfDir, "frag_kprobes.bpf.o"),
 	}
 
 	fmt.Fprintf(os.Stderr, "vxlan-tracer %s\n", version)
@@ -63,7 +64,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: attach failed: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stderr, "attached: tc ingress, tc egress, kprobe/icmp_rcv; maps pinned under "+cfg.PinDir)
+	fmt.Fprintln(os.Stderr, "attached: tc ingress, tc egress, kprobe/icmp_rcv, kprobe/ip_do_fragment; maps pinned under "+cfg.PinDir)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -82,7 +83,7 @@ func main() {
 	if err := att.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: detach error: %v\n", err)
 	}
-	fmt.Fprintln(os.Stderr, "detached kprobe (TC filters remain attached; maps remain pinned)")
+	fmt.Fprintln(os.Stderr, "detached kprobes (TC filters remain attached; maps remain pinned)")
 
 	if diagErr != nil {
 		fmt.Fprintf(os.Stderr, "error: diagnosis failed: %v\n", diagErr)
@@ -114,6 +115,10 @@ func readVerdict(att *loader.Attachment, pinDir string) (diag.Diagnosis, error) 
 	if err != nil {
 		return diag.Diagnosis{}, fmt.Errorf("read flow_state: %w", err)
 	}
+	fragVal, err := reader.FragEventsTotal()
+	if err != nil {
+		return diag.Diagnosis{}, fmt.Errorf("read frag_events_total: %w", err)
+	}
 
 	var maxOuterIPLen int
 	for _, f := range flows {
@@ -133,6 +138,7 @@ func readVerdict(att *loader.Attachment, pinDir string) (diag.Diagnosis, error) 
 		MaxOuterIPLen:   maxOuterIPLen,
 		UnderlayMTU:     underlayMTU,
 		OverlayMTU:      overlayMTU,
+		FragEventsTotal: fragVal.Total,
 	}
 	return diag.Diagnose(obs), nil
 }
