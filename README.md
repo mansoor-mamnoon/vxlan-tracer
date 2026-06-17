@@ -2,10 +2,9 @@
 
 An eBPF-based diagnostic tool for VXLAN MTU blackholes.
 
-**Status: lab-validated prototype — BPF programs implemented, Go CLI attaches,
-pins maps, reads them back, and prints a verdict. All five verdicts proven
-end-to-end in a netns lab (Days 5–6), including the DF=0 fragmentation path;
-not production-validated.**
+**Status: repeatable lab prototype — all five verdicts proven end-to-end via an
+automated scenario runner (Day 7). Binary reruns in the same container are
+idempotent (no manual cleanup required). Not production-validated.**
 
 ---
 
@@ -109,8 +108,76 @@ sudo vxlan-tracer --overlay vxlan0 --underlay eth0 --json
 
 All five verdicts (PTB_DELIVERED, PTB_SUPPRESSED, VXLAN_FRAGMENTATION_OBSERVED,
 VXLAN_MTU_MISCONFIGURATION, NO_ISSUE_OBSERVED) are reachable through the actual
-Go binary. PTB paths proven in Day 5; DF=0 fragmentation path (VXLAN_FRAGMENTATION_OBSERVED)
-proven live in Day 6 — see `evidence/day-06.md`.
+Go binary. PTB paths proven in Day 5; DF=0 fragmentation path proven in Day 6;
+automated scenario runner (4/4 pass, idempotent reruns) proven in Day 7 —
+see `evidence/` directory.
+
+## Demo: proven JSON outputs
+
+The following outputs were captured from a running Docker container
+(ubuntu:22.04, kernel 6.10.14-linuxkit, aarch64). They are not fabricated.
+
+### PTB_SUPPRESSED — iptables DROP rule active
+
+```json
+{
+  "verdict": "PTB_SUPPRESSED",
+  "message": "5 ICMP type=3/code=4 packet(s) were observed at TC ingress, but 0 reached icmp_rcv: something between the NIC and icmp_rcv — commonly a netfilter/iptables DROP rule — is suppressing PTBs before the kernel can act on them.",
+  "overlay": "vxlan0",
+  "underlay": "veth1",
+  "overlay_mtu": 1450,
+  "underlay_mtu": 1400,
+  "recommended_overlay_mtu": 1350,
+  "ptb_ingress_total": 5,
+  "icmp_rcv_total": 0,
+  "frag_events_total": 0,
+  "max_outer_ip_len": 0
+}
+```
+
+### VXLAN_FRAGMENTATION_OBSERVED — oversized VXLAN traffic (DF=0 default)
+
+```json
+{
+  "verdict": "VXLAN_FRAGMENTATION_OBSERVED",
+  "message": "6 ip_do_fragment invocation(s) were observed while vxlan-tracer was attached; concurrently, the TC egress hook recorded an outer packet length of 1438 bytes, 38 bytes over the underlay MTU (1400). Fragmentation was observed while oversized VXLAN traffic was present — these two signals together are consistent with VXLAN outer packets triggering ip_do_fragment. Note: ip_do_fragment is a global kernel function and may include non-VXLAN fragmentation events on a busy host. Fragmented VXLAN UDP is commonly dropped silently by cloud fabric; in a local lab fragments may reassemble — fragmentation observed here does not by itself confirm packet loss.",
+  "overlay": "vxlan0",
+  "underlay": "veth1",
+  "overlay_mtu": 1450,
+  "underlay_mtu": 1400,
+  "recommended_overlay_mtu": 1350,
+  "ptb_ingress_total": 0,
+  "icmp_rcv_total": 0,
+  "frag_events_total": 6,
+  "frag_max_skb_len": 1438,
+  "max_outer_ip_len": 1438
+}
+```
+
+`frag_max_skb_len` appears only when fragmentation is observed. Its value at
+ip_do_fragment entry is kernel-dependent (may be the outer or inner IP length
+depending on kernel version and route MTU cache state).
+
+### What is proven (as of Day 7)
+
+- All four active verdict paths execute in a single automated Docker run via
+  `scripts/run-scenarios.sh` (4/4 pass, exit 0).
+- Binary reruns in the same container are idempotent: no "file exists" error,
+  no stale counter false positives.
+- PTB suppression detection works end-to-end: TC ingress count vs. icmp_rcv
+  count correctly captures the iptables DROP delta.
+- Fragmentation verdict uses two-signal corroboration: both ip_do_fragment
+  kprobe and TC egress max packet size must agree for the strongest verdict.
+- Exit code 0 = verdict produced; exit code 2 = tool/runtime error.
+
+### What is not proven
+
+- ip_do_fragment events are not scoped to VXLAN traffic (the kprobe is global).
+  On a busy host with non-VXLAN fragmentation, `frag_events_total` will be
+  inflated. The verdict message says so explicitly.
+- Production Kubernetes environments are not tested. Only a two-namespace
+  veth pair lab on a linuxkit ARM64 kernel is proven.
+- x86_64 kernels are not tested.
 
 ## Lab setup
 
