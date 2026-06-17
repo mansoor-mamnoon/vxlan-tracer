@@ -10,10 +10,9 @@ import "fmt"
 type Verdict string
 
 const (
-	// VerdictNoPTBObserved: no PTB crossed TC ingress during the window, and
-	// no MTU misconfiguration or oversized traffic was detected either. This
-	// does not prove the path is healthy — only that nothing was observed.
-	VerdictNoPTBObserved Verdict = "NO_PTB_OBSERVED"
+	// VerdictNoIssueObserved: nothing of diagnostic interest was observed.
+	// Does not prove the path is healthy.
+	VerdictNoIssueObserved Verdict = "NO_ISSUE_OBSERVED"
 
 	// VerdictPTBDelivered: PTBs were observed at TC ingress and the same (or
 	// more) reached icmp_rcv — the kernel's ICMP handling path is receiving
@@ -25,18 +24,26 @@ const (
 	// netfilter/iptables DROP rule — is suppressing them.
 	VerdictPTBSuppressed Verdict = "PTB_SUPPRESSED"
 
-	// VerdictFragmentationRisk: no PTB was observed, but real traffic was
-	// seen whose outer IP packet length exceeds the underlay MTU. This is
-	// consistent with the kernel silently fragmenting (DF=0) rather than
-	// dropping and generating a PTB (DF=1) — no PTB is expected in that case,
-	// so its absence here is not by itself suppression.
-	VerdictFragmentationRisk Verdict = "VXLAN_FRAGMENTATION_RISK"
+	// VerdictFragmentationObserved: ip_do_fragment fired at least once while
+	// vxlan-tracer was attached, and no PTBs were observed. This is direct
+	// BPF evidence that the kernel fragmented an outgoing IP packet. In the
+	// stale-MTU VXLAN scenario, this means oversized outer packets are being
+	// fragmented rather than dropped. Fragmented VXLAN UDP is commonly dropped
+	// silently by cloud fabric (AWS/GCP/Azure VPC); in a local lab, fragments
+	// may reassemble successfully — fragmentation ≠ packet loss in all cases.
+	// See docs/forbidden-claims.md.
+	VerdictFragmentationObserved Verdict = "VXLAN_FRAGMENTATION_OBSERVED"
 
-	// VerdictMTUMisconfiguration: no PTB and no oversized traffic was
-	// observed, but the overlay MTU is configured higher than is safe for
-	// the underlay MTU. This is a static configuration risk, not an observed
-	// packet event — it describes what would happen if traffic large enough
-	// to trigger it were sent.
+	// VerdictMTURisk: no PTB and no ip_do_fragment event was observed, but
+	// real traffic was seen whose outer IP packet length exceeds the underlay
+	// MTU (from flow_state.max_outer_ip_len). This is consistent with the
+	// kernel fragmenting (DF=0), but ip_do_fragment did not fire during the
+	// observation window — or the fragmentation counter was not accessible.
+	VerdictMTURisk Verdict = "VXLAN_MTU_RISK"
+
+	// VerdictMTUMisconfiguration: no PTB, no fragmentation event, and no
+	// oversized traffic was observed, but the overlay MTU is configured higher
+	// than is safe for the underlay MTU. Static configuration risk only.
 	VerdictMTUMisconfiguration Verdict = "VXLAN_MTU_MISCONFIGURATION"
 )
 
@@ -88,21 +95,27 @@ type Diagnosis struct {
 //
 // Precedence (most specific, highest-confidence signal first):
 //
-//  1. A PTB was actually observed at TC ingress (PTBIngressTotal > 0): this
-//     is direct evidence of a real PTB crossing the underlay, so it takes
-//     priority over any static MTU check. Whether it reached icmp_rcv
-//     decides PTB_DELIVERED vs PTB_SUPPRESSED.
+//  1. PTB observed at TC ingress (PTBIngressTotal > 0): direct packet evidence
+//     takes priority over everything else. Whether icmp_rcv received the PTB
+//     decides PTB_SUPPRESSED vs PTB_DELIVERED.
 //
-//  2. No PTB was observed, but oversized real traffic was (MaxOuterIPLen >
-//     UnderlayMTU): VXLAN_FRAGMENTATION_RISK. No PTB is expected here if the
-//     traffic had DF=0, so its absence is not itself suppression.
+//  2. ip_do_fragment fired (FragEventsTotal > 0) and no PTB was observed:
+//     VXLAN_FRAGMENTATION_OBSERVED. Direct BPF evidence from the fragmentation
+//     kprobe — the kernel fragmented at least one packet. Fragmentation ≠
+//     packet loss in all environments (fragments reassemble in a local lab),
+//     so the verdict name avoids "blackhole" or "loss."
 //
-//  3. No PTB and no oversized traffic was observed, but the static MTU
-//     check shows the overlay MTU is unsafe for the underlay MTU:
-//     VXLAN_MTU_MISCONFIGURATION — a configuration risk, not yet manifested
-//     in observed traffic.
+//  3. No fragmentation event, but flow_state shows an oversized packet
+//     (MaxOuterIPLen > UnderlayMTU): VXLAN_MTU_RISK. Indirect evidence from
+//     the TC egress map — a packet large enough to trigger fragmentation was
+//     observed but ip_do_fragment did not register it during this window (or
+//     was not accessible). DF=0 means no PTB is generated, so its absence is
+//     not suppression.
 //
-//  4. Otherwise: NO_PTB_OBSERVED.
+//  4. No PTB, no fragmentation event, no oversized traffic, but static MTU
+//     check fails: VXLAN_MTU_MISCONFIGURATION. Config risk not yet triggered.
+//
+//  5. Otherwise: NO_ISSUE_OBSERVED.
 func Diagnose(obs Observation) Diagnosis {
 	if obs.PTBIngressTotal > 0 {
 		if obs.ICMPRcvTotal > 0 {
@@ -124,13 +137,29 @@ func Diagnose(obs Observation) Diagnosis {
 		}
 	}
 
+	if obs.FragEventsTotal > 0 {
+		return Diagnosis{
+			Verdict: VerdictFragmentationObserved,
+			Message: fmt.Sprintf(
+				"%d ip_do_fragment invocation(s) were observed while vxlan-tracer was attached. "+
+					"The kernel fragmented at least one outgoing IP packet. In the stale-MTU VXLAN "+
+					"scenario this indicates that outer VXLAN packets exceed the underlay MTU (%d) "+
+					"and are being fragmented rather than dropped. Fragmented VXLAN UDP is commonly "+
+					"dropped silently by cloud fabric; in a local lab fragments may reassemble — "+
+					"fragmentation observed here does not by itself confirm packet loss.",
+				obs.FragEventsTotal, obs.UnderlayMTU),
+		}
+	}
+
 	if obs.UnderlayMTU > 0 && obs.MaxOuterIPLen > obs.UnderlayMTU {
 		return Diagnosis{
-			Verdict: VerdictFragmentationRisk,
+			Verdict: VerdictMTURisk,
 			Message: fmt.Sprintf(
-				"No PTBs were observed, but a flow's outer IP packet length (%d) exceeded the underlay "+
-					"MTU (%d). This is consistent with the kernel fragmenting the outer packet (DF=0) "+
-					"rather than dropping it and generating a PTB (DF=1); no PTB is expected in that case.",
+				"No PTBs or fragmentation events were observed, but a flow's outer IP packet length (%d) "+
+					"exceeded the underlay MTU (%d). This is consistent with the kernel fragmenting the "+
+					"outer packet (DF=0) rather than dropping it and generating a PTB (DF=1); no PTB is "+
+					"expected in that case. The ip_do_fragment counter did not register this during the "+
+					"observation window.",
 				obs.MaxOuterIPLen, obs.UnderlayMTU),
 		}
 	}
@@ -141,19 +170,19 @@ func Diagnose(obs Observation) Diagnosis {
 			return Diagnosis{
 				Verdict: VerdictMTUMisconfiguration,
 				Message: fmt.Sprintf(
-					"No PTBs or oversized traffic were observed during this run, but the overlay MTU (%d) "+
-						"exceeds the safe value for the underlay MTU (%d) by %d byte(s). This is a static "+
-						"configuration risk: traffic large enough to use the full overlay MTU would trigger "+
-						"either fragmentation or a PTB, depending on the DF bit.",
+					"No PTBs, fragmentation events, or oversized traffic were observed during this run, "+
+						"but the overlay MTU (%d) exceeds the safe value for the underlay MTU (%d) by "+
+						"%d byte(s). This is a static configuration risk: traffic large enough to use "+
+						"the full overlay MTU would trigger either fragmentation or a PTB, depending on the DF bit.",
 					mtu.OverlayMTU, mtu.UnderlayMTU, mtu.ExcessBytes),
 			}
 		}
 	}
 
 	return Diagnosis{
-		Verdict: VerdictNoPTBObserved,
-		Message: "No ICMP type=3/code=4 packets were observed at TC ingress during this run, and no " +
-			"oversized traffic or MTU misconfiguration was detected. This does not prove the path is " +
+		Verdict: VerdictNoIssueObserved,
+		Message: "No ICMP type=3/code=4 packets, no ip_do_fragment events, no oversized traffic, and no " +
+			"MTU misconfiguration were detected during this run. This does not prove the path is " +
 			"healthy — it only means nothing relevant was observed while vxlan-tracer was attached.",
 	}
 }
