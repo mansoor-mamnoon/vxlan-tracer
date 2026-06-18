@@ -19,6 +19,7 @@ type Config struct {
 	TCEgressObj   string
 	KprobeObj     string
 	FragKprobeObj string
+	VXLANPort     uint16
 }
 
 // Attachment is an empty stand-in on non-Linux platforms.

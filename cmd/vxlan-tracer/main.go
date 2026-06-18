@@ -49,7 +49,6 @@ func main() {
 	noClear := flag.Bool("no-clear", false, "Skip clearing pinned map counters at start of run (default: clear for fresh baseline)")
 	verbose := flag.Bool("v", false, "Print all flow events, not just findings")
 	showVersion := flag.Bool("version", false, "Print version and exit")
-	_ = vxlanPort
 	_ = verbose
 
 	flag.Parse()
@@ -73,13 +72,15 @@ func main() {
 		TCEgressObj:   filepath.Join(*bpfDir, "tc_egress_vxlan0.bpf.o"),
 		KprobeObj:     filepath.Join(*bpfDir, "kprobes.bpf.o"),
 		FragKprobeObj: filepath.Join(*bpfDir, "frag_kprobes.bpf.o"),
+		VXLANPort:     uint16(*vxlanPort),
 	}
 
 	fmt.Fprintf(os.Stderr, "vxlan-tracer %s\n", version)
-	fmt.Fprintf(os.Stderr, "overlay:  %s\n", cfg.Overlay)
-	fmt.Fprintf(os.Stderr, "underlay: %s\n", cfg.Underlay)
-	fmt.Fprintf(os.Stderr, "pin dir:  %s\n", cfg.PinDir)
-	fmt.Fprintf(os.Stderr, "bpf dir:  %s\n", *bpfDir)
+	fmt.Fprintf(os.Stderr, "overlay:    %s\n", cfg.Overlay)
+	fmt.Fprintf(os.Stderr, "underlay:   %s\n", cfg.Underlay)
+	fmt.Fprintf(os.Stderr, "vxlan port: %d\n", *vxlanPort)
+	fmt.Fprintf(os.Stderr, "pin dir:    %s\n", cfg.PinDir)
+	fmt.Fprintf(os.Stderr, "bpf dir:    %s\n", *bpfDir)
 
 	att, err := loader.Attach(cfg)
 	if err != nil {

@@ -40,8 +40,14 @@
 
 #include "maps.h"
 
-/* VXLAN destination UDP port in network byte order. */
-#define VXLAN_UDP_PORT_NBO  bpf_htons(4789)
+/* Map: runtime config written by the Go loader before TC attachment.
+ * Key 0 → struct vxlan_cfg.  vxlan_dport == 0 means "use default 4789". */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key,   __u32);
+	__type(value, struct vxlan_cfg);
+} vxlan_config SEC(".maps");
 
 /* Map: per-VTEP-pair PTB counter (ingress, before netfilter). */
 struct {
@@ -125,8 +131,15 @@ int tc_ingress_count_ptb(struct __sk_buff *skb)
 	if ((void *)(orig_udph + 1) > data_end)
 		goto update_map;  /* truncated: count conservatively */
 
-	/* Confirm destination port is VXLAN (4789). */
-	if (orig_udph->dest != VXLAN_UDP_PORT_NBO)
+	/* Read configured VXLAN port from the runtime config map.
+	 * ARRAY maps always return a valid pointer for key 0, so the null
+	 * check is for the BPF verifier only.  Fall back to 4789 when the
+	 * Go loader has not yet written a value (vxlan_dport == 0). */
+	__u32 cfg_k = 0;
+	struct vxlan_cfg *cfg = bpf_map_lookup_elem(&vxlan_config, &cfg_k);
+	__be16 vxlan_port = (cfg && cfg->vxlan_dport) ? cfg->vxlan_dport
+	                                               : bpf_htons(4789);
+	if (orig_udph->dest != vxlan_port)
 		return TC_ACT_OK;
 
 update_map:;

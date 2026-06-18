@@ -27,6 +27,7 @@ type Config struct {
 	TCEgressObj     string // compiled tc_egress_vxlan0.bpf.o path
 	KprobeObj       string // compiled kprobes.bpf.o path
 	FragKprobeObj   string // compiled frag_kprobes.bpf.o path (ip_do_fragment counter)
+	VXLANPort       uint16 // VXLAN UDP destination port in host byte order (0 = default 4789)
 }
 
 // Attachment holds everything attached by Attach, for cleanup via Close.
@@ -82,6 +83,10 @@ func Attach(cfg Config) (*Attachment, error) {
 		return nil, fmt.Errorf("load tc ingress object %s: %w", cfg.TCIngressObj, err)
 	}
 	a.ingressColl = ingressColl
+	if err := writeVXLANConfig(ingressColl, cfg.VXLANPort); err != nil {
+		a.Close()
+		return nil, fmt.Errorf("write vxlan config map: %w", err)
+	}
 	if err := attachTC(underlay, netlink.HANDLE_MIN_INGRESS, ingressProg, "tc_ingress_eth0"); err != nil {
 		a.Close()
 		return nil, fmt.Errorf("attach tc ingress on %q: %w", cfg.Underlay, err)
@@ -125,6 +130,37 @@ func Attach(cfg Config) (*Attachment, error) {
 	a.fragKprobeLink = fkp
 
 	return a, nil
+}
+
+// vxlanCfgVal mirrors struct vxlan_cfg in bpf/maps.h.
+// VXLANDPort must be in network byte order (big-endian) to match the
+// __be16 field in the BPF struct that the TC program compares against
+// udph->dest (which also arrives in NBO from the packet).
+type vxlanCfgVal struct {
+	VXLANDPort uint16
+	Pad        uint16
+}
+
+// writeVXLANConfig writes the configured VXLAN UDP destination port into the
+// vxlan_config ARRAY map in coll.  The port is converted from host byte order
+// to network byte order before writing.  If portHost is 0 the default 4789 is
+// used.  If the map is absent (object compiled without it) the call is a no-op.
+func writeVXLANConfig(coll *ebpf.Collection, portHost uint16) error {
+	m, ok := coll.Maps["vxlan_config"]
+	if !ok {
+		return nil
+	}
+	if portHost == 0 {
+		portHost = 4789
+	}
+	// Swap bytes: host-byte-order uint16 → network byte order uint16.
+	// The cilium/ebpf library encodes structs in native (LE) byte order.
+	// Storing portNBO = bpf_htons(portHost) makes the encoded bytes match
+	// NBO, which is what udph->dest carries in the packet.
+	portNBO := (portHost >> 8) | (portHost << 8)
+	key := uint32(0)
+	val := vxlanCfgVal{VXLANDPort: portNBO}
+	return m.Update(&key, &val, ebpf.UpdateAny)
 }
 
 // ensureClsact creates a clsact qdisc on l if one does not already exist.

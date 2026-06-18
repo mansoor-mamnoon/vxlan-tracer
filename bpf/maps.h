@@ -92,3 +92,17 @@ struct frag_val {
 	__u32 max_skb_len;  /* max skb->len seen (0 until commit 7)           */
 	__u32 pad;
 };
+
+/* ---- Runtime config (ARRAY, key 0; written by the Go loader before attachment) ---- */
+
+/* Value for vxlan_config ARRAY (key 0).
+ * vxlan_dport: VXLAN UDP destination port in NETWORK byte order.
+ *              0 means unset; BPF programs fall back to bpf_htons(4789).
+ * The Go loader converts the CLI --vxlan-port value to NBO and writes it
+ * into this map immediately after loading the TC ingress object, before
+ * the TC filter is attached to the interface.
+ */
+struct vxlan_cfg {
+	__be16 vxlan_dport; /* NBO; 0 = use default 4789 */
+	__u16  pad;
+};
