@@ -1,0 +1,73 @@
+# Two pods for generating cross-node VXLAN traffic.
+#
+# podAntiAffinity with requiredDuringSchedulingIgnoredDuringExecution ensures
+# the two pods CANNOT land on the same node.  In a single-node cluster both
+# pods will remain Pending — this is intentional: it prevents a false claim
+# that cross-node traffic was tested when it wasn't.
+#
+# Usage:
+#   kubectl apply -f k8s/namespace.yaml
+#   kubectl apply -f k8s/traffic-pods.yaml
+#   kubectl -n vxlan-tracer-test get pods -o wide   # confirm different nodes
+#   # From pod-a, ping pod-b's IP to generate cross-node traffic:
+#   kubectl -n vxlan-tracer-test exec -it pod-a -- ping -c 10 <pod-b-ip>
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-a
+  namespace: vxlan-tracer-test
+  labels:
+    app: vxlan-tracer-traffic
+    role: sender
+spec:
+  # Spread pods across nodes: pod-a and pod-b must not share a node.
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app: vxlan-tracer-traffic
+          topologyKey: kubernetes.io/hostname
+  containers:
+    - name: nettools
+      image: nicolaka/netshoot:latest
+      command: ["sleep", "3600"]
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "16Mi"
+        limits:
+          cpu: "100m"
+          memory: "64Mi"
+  restartPolicy: Never
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-b
+  namespace: vxlan-tracer-test
+  labels:
+    app: vxlan-tracer-traffic
+    role: receiver
+spec:
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app: vxlan-tracer-traffic
+          topologyKey: kubernetes.io/hostname
+  containers:
+    - name: nettools
+      image: nicolaka/netshoot:latest
+      command: ["sleep", "3600"]
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "16Mi"
+        limits:
+          cpu: "100m"
+          memory: "64Mi"
+  restartPolicy: Never
