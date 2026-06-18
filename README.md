@@ -2,9 +2,9 @@
 
 An eBPF-based diagnostic tool for VXLAN MTU blackholes.
 
-**Status: repeatable lab prototype — all five verdicts proven end-to-end via an
-automated scenario runner (Day 7). Binary reruns in the same container are
-idempotent (no manual cleanup required). Not production-validated.**
+**Status: technically honest v0 prototype — all five verdicts proven end-to-end
+via an automated 5-scenario runner (Day 8). ip_do_fragment scoping limitation
+documented with verifier and spike evidence. Not production-validated.**
 
 ---
 
@@ -150,7 +150,8 @@ The following outputs were captured from a running Docker container
   "icmp_rcv_total": 0,
   "frag_events_total": 6,
   "frag_max_skb_len": 1438,
-  "max_outer_ip_len": 1438
+  "max_outer_ip_len": 1438,
+  "fragmentation_scope": "global_corroborated"
 }
 ```
 
@@ -158,26 +159,41 @@ The following outputs were captured from a running Docker container
 ip_do_fragment entry is kernel-dependent (may be the outer or inner IP length
 depending on kernel version and route MTU cache state).
 
-### What is proven (as of Day 7)
+`fragmentation_scope` is present only for fragmentation verdicts:
+- `global_corroborated`: both ip_do_fragment fired AND TC egress saw outer packets over the underlay MTU — the two signals agree.
+- `global_unscoped`: ip_do_fragment fired but TC egress did not corroborate an oversized VXLAN outer packet. The counter may include non-VXLAN fragmentation.
 
-- All four active verdict paths execute in a single automated Docker run via
-  `scripts/run-scenarios.sh` (4/4 pass, exit 0).
-- Binary reruns in the same container are idempotent: no "file exists" error,
-  no stale counter false positives.
+See `docs/fragmentation-scoping.md` for the five scoping options considered and why `bpf_get_netns_cookie`-based scoping is not feasible on this kernel.
+
+### What is proven (as of Day 8)
+
+- All five verdict paths execute in a single automated Docker run via
+  `scripts/run-scenarios.sh` (5/5 pass, exit 0, including second-run idempotency).
+- Binary reruns in the same container are idempotent after `ip route flush cache`:
+  no "file exists" error, no stale counter false positives.
 - PTB suppression detection works end-to-end: TC ingress count vs. icmp_rcv
   count correctly captures the iptables DROP delta.
 - Fragmentation verdict uses two-signal corroboration: both ip_do_fragment
-  kprobe and TC egress max packet size must agree for the strongest verdict.
+  kprobe and TC egress max packet size must agree for `global_corroborated`.
 - Exit code 0 = verdict produced; exit code 2 = tool/runtime error.
+- `bpf_get_netns_cookie` is NOT available for kprobe or sched_cls program types
+  on 6.10.14-linuxkit: confirmed with verifier error (`program of this type cannot
+  use helper bpf_get_netns_cookie#122`). Not assumed — evidence-backed.
+- ip_do_fragment header parsing via `skb->network_header` is unreliable: the
+  network_header offset points to the inner IP header when the route MTU cache is
+  active. Scoping via header parsing is deferred; two-signal corroboration is the
+  v0 strategy. Not assumed — confirmed by running spike.
 
 ### What is not proven
 
 - ip_do_fragment events are not scoped to VXLAN traffic (the kprobe is global).
   On a busy host with non-VXLAN fragmentation, `frag_events_total` will be
-  inflated. The verdict message says so explicitly.
+  inflated. The verdict message says so explicitly. VXLAN-specific scoping is not
+  feasible on this kernel; see `docs/fragmentation-scoping.md`.
 - Production Kubernetes environments are not tested. Only a two-namespace
   veth pair lab on a linuxkit ARM64 kernel is proven.
-- x86_64 kernels are not tested.
+- x86_64 kernels are not tested. All tests are on 6.10.14-linuxkit aarch64
+  (Docker Desktop, Apple Silicon). See `docs/kernel-matrix.md`.
 
 ## Lab setup
 

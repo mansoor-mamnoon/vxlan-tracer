@@ -584,3 +584,62 @@ Each scenario ran idempotent cleanup before setup. No "file exists" errors. No s
 **Result:** PASS (4/4)
 **Caveat:** aarch64 kernel only; fragmentation result corroborated (two-signal) because fresh cleanup
 resets route MTU cache via namespace recreation.
+
+---
+
+## 2026-06-17 — Day 8: 5-scenario run including second-run idempotency
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64, --privileged
+**Command:** `BINARY=/tmp/vxlan-tracer-linux-arm64-d8 BPF_DIR=/tmp/bpfobjs DURATION=15s bash scripts/run-scenarios.sh`
+**Expected:** 5 scenarios pass; fragmentation second-run reports global_corroborated after route cache flush
+**Actual:**
+```
+Results: 5 passed, 0 failed
+```
+
+Scenario results:
+- healthy_small → VXLAN_MTU_MISCONFIGURATION: PASS
+- fragmentation → VXLAN_FRAGMENTATION_OBSERVED: PASS (fragmentation_scope=global_corroborated, max_outer_ip_len=1438)
+- ptb_delivered → PTB_DELIVERED: PASS
+- ptb_suppressed → PTB_SUPPRESSED: PASS
+- fragmentation (second run, route cache flushed) → VXLAN_FRAGMENTATION_OBSERVED: PASS (fragmentation_scope=global_corroborated, max_outer_ip_len=1438)
+
+**Result:** PASS (5/5)
+**Caveat:** aarch64 / 6.10.14-linuxkit only. `ip route flush cache` used for second run to clear PMTU cache.
+See evidence/day-08-scenario-rerun.md and evidence/day-08-route-cache.md.
+
+---
+
+## 2026-06-17 — Day 8: bpf_get_netns_cookie availability probe
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64, Go cilium/ebpf loader
+**Command:** `go run spikes/probe_helper/main.go` (after compiling both probe BPF objects)
+**Expected:** Determine whether bpf_get_netns_cookie is available for kprobe or sched_cls program types
+**Actual:**
+```
+kprobe: UNSUPPORTED — program of this type cannot use helper bpf_get_netns_cookie#122
+sched_cls: UNSUPPORTED — program of this type cannot use helper bpf_get_netns_cookie#122
+```
+**Result:** CONFIRMED UNAVAILABLE — netns cookie scoping of ip_do_fragment is not feasible
+**Caveat:** Restriction is in the kernel's allowed_prog_types for the helper. Not a 6.10.14 regression;
+this design decision also applies to 5.15.x (verified via kernel source review).
+See evidence/day-08-helper-availability.md.
+
+---
+
+## 2026-06-17 — Day 8: ip_do_fragment header parsing spike
+
+**Environment:** Docker ubuntu:22.04, kernel 6.10.14-linuxkit aarch64
+**Command:** `spikes/probe_frag_scope/main.go` with `spikes/probe_frag_scope.bpf.c` loaded
+**Expected:** Determine whether skb->network_header reliably points to outer IP header at ip_do_fragment
+**Actual (with route MTU cache active):**
+```
+skb_len=1388, ip_proto=1 (ICMP), is_vxlan=0
+frag_vxlan_count=2, frag_total=6
+```
+skb_len=1388 is the inner packet length (outer=1438). ip_proto=1 is the inner IP proto (ICMP ping).
+network_header pointed to inner IP header, not outer.
+**Result:** CONFIRMED UNRELIABLE — header parsing deferred; two-signal corroboration chosen
+**Caveat:** First-run events (before route cache) correctly showed ip_proto=17, dport=4789.
+Inconsistency is cache-state-dependent. Not usable as reliable VXLAN filter.
+See evidence/day-08-frag-scope-spike.md.

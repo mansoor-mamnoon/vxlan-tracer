@@ -344,3 +344,61 @@ teardown/setup of the netns between runs, or (b) use of separate Docker containe
 | VXLAN_FRAGMENTATION_OBSERVED verdict driven by BPF counter | frag_events_total=6, verdict correct | **CONFIRMED** (Day 6) |
 | JSON output correct for both frag and PTB paths | two separate Docker containers; exit 0 | **CONFIRMED** (Day 6) |
 | bpftrace can read skb->dev->name in kprobe | Not verified (bpftrace broken on linuxkit) | Unknown |
+
+## Day 8 findings (Docker linuxkit 6.10.14-linuxkit aarch64)
+
+### Finding 23: bpf_get_netns_cookie NOT available for BPF_PROG_TYPE_KPROBE or BPF_PROG_TYPE_SCHED_CLS
+
+Verifier error (cilium/ebpf loader, BPF object compiled and loaded):
+```
+program probe_netns_cookie_kprobe: load program: invalid argument:
+  program of this type cannot use helper bpf_get_netns_cookie#122
+```
+Same error for SCHED_CLS. /proc/kallsyms shows wrappers only for socket-type
+programs (sk_msg, sock, sock_addr, sock_ops, sockopt). This is a kernel design
+decision: the helper's allowed_prog_types does not include kprobe or TC.
+Netns-cookie-based scoping of ip_do_fragment is not feasible on any kernel
+where this restriction holds (6.10.14 and likely all current mainline).
+
+### Finding 24: bpf_probe_read_kernel is permitted in kprobe programs
+
+spikes/probe_frag_scope.bpf.c compiled and loaded without verifier rejection.
+bpf_probe_read_kernel is available in BPF_PROG_TYPE_KPROBE (expected behavior;
+it's the standard way to read kernel memory from kprobe programs).
+
+### Finding 25: skb->network_header at ip_do_fragment does not consistently point to outer IP header
+
+spikes/probe_frag_scope.bpf.c reads head + network_header + 9 (IP proto field).
+With route MTU cache active: ip_proto=1 (ICMP), skb->len=1388 → points to inner
+IP header. Without cache (first run): 2 calls saw ip_proto=17 (UDP), dport=4789.
+The inconsistency is caused by the VXLAN driver's skb construction varying with
+route cache state. Header parsing at ip_do_fragment is not reliable for VXLAN
+scoping; two-signal corroboration (Option 5) is the v0 strategy.
+
+### Finding 26: ip route flush cache is effective on 6.10.14-linuxkit
+
+After fragmentation: `ip route show cache` shows `mtu 1350` for vxlan0 routes.
+After `ip route flush cache`: cache is empty (confirmed with ip route show cache).
+Next large pings retrigger full-size outer packets (1438B); fragmentation_scope
+returns to global_corroborated. The man page warning about flush being "mostly
+obsolete" does not apply on 6.10.14-linuxkit — flush is effective.
+
+## Updated hook confidence table (post-Day 8)
+
+| Hook | Verified how | Confidence |
+|------|-------------|------------|
+| ip_do_fragment symbol present on 6.10.14 | /proc/kallsyms confirmed | **CONFIRMED** |
+| ip_do_fragment fires for DF=0 oversized outer | ftrace kprobe: 20 events/10 pings | **CONFIRMED** |
+| ip_do_fragment fires for stale-MTU scenario | ftrace kprobe: 6 events/3 pings | **CONFIRMED** |
+| ip_do_fragment kprobe via cilium/ebpf loader | link.Kprobe() success; map pinned | **CONFIRMED** |
+| ip_do_fragment CO-RE skb->len read resolves | binary loaded without CO-RE error | **CONFIRMED** |
+| bpf_get_netns_cookie in kprobe: NOT available | verifier: "cannot use helper" #122 | **CONFIRMED (Day 8)** |
+| bpf_get_netns_cookie in sched_cls: NOT available | same verifier error | **CONFIRMED (Day 8)** |
+| bpf_probe_read_kernel in kprobe: available | probe_frag_scope compiled + loaded | **CONFIRMED (Day 8)** |
+| skb->network_header at ip_do_fragment: inconsistent | sometimes inner, sometimes outer IP header | **CONFIRMED (Day 8)** |
+| Two-signal corroboration: 5/5 scenarios pass | automated scenario runner, 2 runs | **CONFIRMED (Day 8)** |
+| ip route flush cache: clears PMTU on 6.10.14 | cache empty after flush; large pings retrigger | **CONFIRMED (Day 8)** |
+| icmp_rcv IS a T symbol on 6.10.14 | /proc/kallsyms confirmed | **CONFIRMED** |
+| icmp_rcv fires AFTER netfilter INPUT | counter experiment | **CONFIRMED** |
+| iptables DROP before icmp_rcv | counter experiment | **CONFIRMED** |
+| bpftrace can read skb->dev->name in kprobe | Not verified (bpftrace broken on linuxkit) | Unknown |

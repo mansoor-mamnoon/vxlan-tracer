@@ -154,6 +154,25 @@ Do not claim packet loss from `frag_events_total > 0` alone.
 
 ---
 
+## 16. "Tested on kernel X" based on a Docker container image label
+
+**Why forbidden:** Docker containers share the host kernel. An `ubuntu:22.04`
+container on Docker Desktop for Mac runs on Docker Desktop's LinuxKit kernel
+(currently 6.10.14-linuxkit), NOT on Ubuntu 22.04's kernel (5.15.x). The
+container image label describes only the userspace.
+
+`uname -r` from inside the test environment is the authoritative record of the
+kernel under test. A claim that "we tested on 5.15 LTS" is only valid if
+`uname -r` inside the test environment outputs a 5.15.x string.
+
+Testing different Docker image tags (ubuntu:22.04 vs. ubuntu:20.04 vs.
+debian:12) on Docker Desktop for Mac still tests the same 6.10.14-linuxkit
+kernel each time. Container image diversity is not kernel diversity.
+
+Documented in `docs/kernel-matrix.md`.
+
+---
+
 ## 15. "Idempotent across all kernel versions"
 
 **Why forbidden:** The idempotent TC attach (`FilterList+FilterDel`) and map

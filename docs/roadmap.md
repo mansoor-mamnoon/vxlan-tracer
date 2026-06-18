@@ -46,6 +46,17 @@ namespace environment. No production deployment required.
 - [x] frag_max_skb_len surfaced in JSON output (Day 7)
 - [x] docs/reproducibility.md — Docker quickstart, capability requirements, known kernel behavior (Day 7)
 - [x] make scenarios target for Docker end-to-end test (Day 7)
+- [x] bpf_get_netns_cookie confirmed NOT available for kprobe/sched_cls on 6.10.14-linuxkit (Day 8)
+       NOTE: verifier error captured; /proc/kallsyms confirms no wrapper for these program types
+- [x] ip_do_fragment header parsing spike — skb->network_header inconsistent with route MTU cache (Day 8)
+       NOTE: sometimes outer IP header, sometimes inner; VXLAN scoping via header parsing deferred
+- [x] fragmentation_scope JSON field added — global_corroborated or global_unscoped (Day 8)
+- [x] Scenario runner extended to 5/5 scenarios; second-run idempotency with route cache flush (Day 8)
+- [x] Route/PMTU cache flush proven effective on 6.10.14-linuxkit (ip route flush cache) (Day 8)
+- [x] build-linux-arm64, build-linux-amd64, package, test Makefile targets (Day 8)
+- [x] install/uninstall Makefile targets with Linux-only guard and PREFIX support (Day 8)
+- [x] docs/kernel-matrix.md — Docker does not change kernels; real VMs required for kernel testing (Day 8)
+- [x] docs/fragmentation-scoping.md — five scoping options analyzed; two-signal chosen with evidence (Day 8)
 
 ### V0 scope limitations
 
