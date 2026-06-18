@@ -43,15 +43,45 @@ endif
 # clang emits BTF relocations that libbpf resolves at load time.
 CFLAGS_BPF_KPROBE := $(CFLAGS_BPF) $(_TARGET_ARCH_DEFINE)
 
-.PHONY: all build bpf bpf-check generate lint vet \
+.PHONY: all build build-linux-arm64 build-linux-amd64 package \
+        bpf bpf-check generate lint vet test \
         lab-up lab-down smoke-small smoke-large scenarios cleanup-bpf \
         attach-bpf check-symbols clean help
 
 all: build
 
 # --- Go userspace binary ---
+# build: native platform (whatever GOOS/GOARCH the host provides)
 build: generate
+	@mkdir -p dist
 	go build -o dist/$(BINARY) ./cmd/vxlan-tracer/
+	@echo "  built: dist/$(BINARY)"
+
+# build-linux-arm64: cross-compile for Linux/aarch64 (required for actual BPF execution)
+build-linux-arm64: generate
+	@mkdir -p dist
+	GOOS=linux GOARCH=arm64 go build -o dist/$(BINARY)-linux-arm64 ./cmd/vxlan-tracer/
+	@echo "  built: dist/$(BINARY)-linux-arm64"
+
+# build-linux-amd64: cross-compile for Linux/x86_64
+build-linux-amd64: generate
+	@mkdir -p dist
+	GOOS=linux GOARCH=amd64 go build -o dist/$(BINARY)-linux-amd64 ./cmd/vxlan-tracer/
+	@echo "  built: dist/$(BINARY)-linux-amd64"
+
+# package: build all Linux targets and create a release tarball under dist/
+# BPF objects must be compiled separately on Linux (see make bpf).
+package: build-linux-arm64 build-linux-amd64
+	@mkdir -p dist/release
+	@cp dist/$(BINARY)-linux-arm64 dist/release/
+	@cp dist/$(BINARY)-linux-amd64 dist/release/
+	@cp scripts/setup-bpf-fs.sh scripts/setup-netns.sh scripts/teardown-netns.sh \
+	    scripts/cleanup-bpf.sh scripts/run-scenarios.sh dist/release/ 2>/dev/null || true
+	@echo "Release files in dist/release/:"
+	@ls -lh dist/release/
+
+test:
+	go test ./...
 
 generate:
 	go generate ./...
@@ -170,9 +200,13 @@ clean:
 
 help:
 	@echo "Targets:"
-	@echo "  build         Go binary (any platform)"
-	@echo "  vet           go vet"
-	@echo "  bpf           Compile BPF objects (Linux only)"
+	@echo "  build              Go binary (native platform, output: dist/vxlan-tracer)"
+	@echo "  build-linux-arm64  Cross-compile for Linux/aarch64"
+	@echo "  build-linux-amd64  Cross-compile for Linux/x86_64"
+	@echo "  package            Build both Linux targets + release bundle in dist/release/"
+	@echo "  test               go test ./..."
+	@echo "  vet                go vet"
+	@echo "  bpf                Compile BPF objects (Linux only)"
 	@echo "  bpf-check     Check BPF build prerequisites"
 	@echo "  attach-bpf    Attach BPF to lab interfaces (Linux, lab must be up)"
 	@echo "  lab-up        Create netns + VXLAN lab topology"
