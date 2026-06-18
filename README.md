@@ -2,9 +2,10 @@
 
 An eBPF-based diagnostic tool for VXLAN MTU blackholes.
 
-**Status: technically honest v0 prototype — all five verdicts proven end-to-end
-via an automated 5-scenario runner (Day 8). ip_do_fragment scoping limitation
-documented with verifier and spike evidence. Not production-validated.**
+**Status: cross-environment v0 prototype — validated on two Linux kernels (6.10.14-linuxkit
+aarch64 and Ubuntu 22.04 5.15.0-181-generic aarch64). All five verdicts pass on both kernels.
+ip_do_fragment scoping limitation documented with verifier and spike evidence on both kernels.
+Not production-validated. x86_64 not yet tested.**
 
 ---
 
@@ -165,35 +166,52 @@ depending on kernel version and route MTU cache state).
 
 See `docs/fragmentation-scoping.md` for the five scoping options considered and why `bpf_get_netns_cookie`-based scoping is not feasible on this kernel.
 
-### What is proven (as of Day 8)
+### What is proven (as of Day 9)
 
-- All five verdict paths execute in a single automated Docker run via
-  `scripts/run-scenarios.sh` (5/5 pass, exit 0, including second-run idempotency).
-- Binary reruns in the same container are idempotent after `ip route flush cache`:
-  no "file exists" error, no stale counter false positives.
-- PTB suppression detection works end-to-end: TC ingress count vs. icmp_rcv
-  count correctly captures the iptables DROP delta.
-- Fragmentation verdict uses two-signal corroboration: both ip_do_fragment
-  kprobe and TC egress max packet size must agree for `global_corroborated`.
-- Exit code 0 = verdict produced; exit code 2 = tool/runtime error.
-- `bpf_get_netns_cookie` is NOT available for kprobe or sched_cls program types
-  on 6.10.14-linuxkit: confirmed with verifier error (`program of this type cannot
-  use helper bpf_get_netns_cookie#122`). Not assumed — evidence-backed.
-- ip_do_fragment header parsing via `skb->network_header` is unreliable: the
-  network_header offset points to the inner IP header when the route MTU cache is
-  active. Scoping via header parsing is deferred; two-signal corroboration is the
-  v0 strategy. Not assumed — confirmed by running spike.
+**Kernel coverage:**
+- 6.10.14-linuxkit aarch64 (Docker Desktop): 5/5 scenarios pass (Day 7–8)
+- 5.15.0-181-generic aarch64 (Ubuntu 22.04 Lima VM): 5/5 scenarios pass (Day 9)
+- Both kernels produce identical verdicts and JSON field values
+
+**BPF / kprobe / CO-RE:**
+- All five verdict paths execute end-to-end via `scripts/run-scenarios.sh`
+- BPF verifier accepts all four programs on both kernels
+- CO-RE BTF relocation resolves `skb->len` correctly on both kernels
+- ip_do_fragment kprobe attaches and counts correctly on both kernels
+- icmp_rcv kprobe filters correctly to ICMP type=3/code=4 on both kernels
+- TC sched_cls ingress and egress attach and count correctly on both kernels
+
+**Scoping and corroboration:**
+- `bpf_get_netns_cookie` NOT available for kprobe/sched_cls on either kernel:
+  - 6.10.14: "program of this type cannot use helper bpf_get_netns_cookie#122"
+  - 5.15.0: "unknown func bpf_get_netns_cookie#122"
+  - Both confirmed by cilium/ebpf verifier capture — not assumed
+- ip_do_fragment header parsing via `skb->network_header` unreliable on both kernels
+  (more severe on 5.15: inner IP seen even on first run, not just under route cache)
+- Two-signal corroboration (`global_corroborated`) fires correctly on both kernels
+- `ip route flush cache` effective on both kernels for PMTU reset between runs
+
+**Idempotency:**
+- Binary reruns in the same container/VM are idempotent after route cache flush
+- Exit code 0 = verdict produced; exit code 2 = tool/runtime error
 
 ### What is not proven
 
 - ip_do_fragment events are not scoped to VXLAN traffic (the kprobe is global).
   On a busy host with non-VXLAN fragmentation, `frag_events_total` will be
   inflated. The verdict message says so explicitly. VXLAN-specific scoping is not
-  feasible on this kernel; see `docs/fragmentation-scoping.md`.
-- Production Kubernetes environments are not tested. Only a two-namespace
-  veth pair lab on a linuxkit ARM64 kernel is proven.
-- x86_64 kernels are not tested. All tests are on 6.10.14-linuxkit aarch64
-  (Docker Desktop, Apple Silicon). See `docs/kernel-matrix.md`.
+  feasible on either tested kernel; see `docs/fragmentation-scoping.md`.
+- Production Kubernetes environments are not tested. Lab-only, two-namespace veth topology.
+- x86_64 kernels are not tested. All tests are on aarch64 (two separate kernels).
+  PT_REGS_PARM1 register convention for `__TARGET_ARCH_x86` is compiled but not
+  run-tested. See `docs/kernel-matrix.md`.
+
+### Validated kernel matrix (as of Day 9)
+
+| Kernel | Distro | Arch | Environment | Scenarios |
+|--------|--------|------|-------------|-----------|
+| 6.10.14-linuxkit | Docker Desktop | aarch64 | Docker `--privileged` | 5/5 PASS |
+| 5.15.0-181-generic | Ubuntu 22.04.5 LTS | aarch64 | Lima VM (macOS VZ) | 5/5 PASS |
 
 ## Lab setup
 
