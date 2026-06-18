@@ -126,7 +126,7 @@ lint:
 	golangci-lint run ./... 2>/dev/null || echo "golangci-lint not installed; skipping"
 
 # --- BPF objects (Linux only) ---
-bpf: bpf-check bpf/tc_ingress_eth0.bpf.o bpf/tc_egress_vxlan0.bpf.o bpf/kprobes.bpf.o
+bpf: bpf-check bpf/tc_ingress_eth0.bpf.o bpf/tc_egress_vxlan0.bpf.o bpf/kprobes.bpf.o bpf/frag_kprobes.bpf.o
 	@echo "BPF build complete."
 	@ls -lh bpf/*.bpf.o
 
@@ -138,9 +138,16 @@ bpf/tc_egress_vxlan0.bpf.o: bpf/tc_egress_vxlan0.bpf.c bpf/maps.h
 	@echo "  CC  $@"
 	$(CLANG) $(CFLAGS_BPF) -c $< -o $@
 
-# kprobes.bpf.c: kprobe section + CO-RE partial struct. Needs __TARGET_ARCH_*
-# for PT_REGS_PARM1 and emits BTF relocations for skb->data field access.
+# kprobes.bpf.c: icmp_rcv kprobe with CO-RE skb filtering (ICMP type=3/code=4).
+# Needs __TARGET_ARCH_* for PT_REGS_PARM1; emits BTF relocations for skb fields.
 bpf/kprobes.bpf.o: bpf/kprobes.bpf.c
+	@echo "  CC  $@"
+	$(CLANG) $(CFLAGS_BPF_KPROBE) -c $< -o $@
+
+# frag_kprobes.bpf.c: ip_do_fragment kprobe with CO-RE skb->len read.
+# Counts all ip_do_fragment invocations and captures max skb->len for two-signal
+# corroboration. Needs __TARGET_ARCH_* for PT_REGS_PARM1.
+bpf/frag_kprobes.bpf.o: bpf/frag_kprobes.bpf.c
 	@echo "  CC  $@"
 	$(CLANG) $(CFLAGS_BPF_KPROBE) -c $< -o $@
 
