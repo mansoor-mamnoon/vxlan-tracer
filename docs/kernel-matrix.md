@@ -31,31 +31,56 @@ kernel.
 
 ## Current tested matrix
 
-| Kernel | Architecture | Status | Notes |
-|--------|-------------|--------|-------|
-| 6.10.14-linuxkit | aarch64 | ✅ TESTED | Docker Desktop on Apple Silicon. All 5 scenarios pass. |
+### Entry 1
 
-## Target matrix for Day 9+
+- **Kernel:** 6.10.14-linuxkit
+- **Distro:** Docker Desktop LinuxKit (not a standard distro)
+- **Arch:** aarch64
+- **Environment:** `--privileged` Docker container on Docker Desktop for Mac (Apple Silicon)
+- **Date:** 2026-06-16 (Day 7)
+- **Scenarios:** 5/5 pass
+- **Result:** ✅ PASS
+- **Notes:** Docker's kernel, not Ubuntu. bpftool version mismatches running kernel (v5.15.199 on 6.10.14 kernel). bpf_get_netns_cookie unavailable for kprobe/sched_cls. skb->network_header inconsistently points to inner IP under route cache.
+- **Evidence:** evidence/day-07-scenarios.md, evidence/day-08-helper-availability.md, evidence/day-08-frag-scope-spike.md
+
+### Entry 2
+
+- **Kernel:** 5.15.0-181-generic
+- **Distro:** Ubuntu 22.04.5 LTS (Jammy Jellyfish)
+- **Arch:** aarch64
+- **Environment:** Lima VM (macOS VZ hypervisor on Apple Silicon host), not Docker
+- **Date:** 2026-06-17 (Day 9)
+- **Scenarios:** 5/5 pass
+- **Result:** ✅ PASS
+- **Notes:**
+  - ip_do_fragment: T symbol, kprobeable — same as linuxkit
+  - icmp_rcv: T symbol, kprobeable — same as linuxkit
+  - BTF: /sys/kernel/btf/vmlinux present (5.8 MB); CO-RE resolves correctly
+  - bpftool: kernel-matched (v5.15.199 matches 5.15 kernel), better than linuxkit
+  - bpf_get_netns_cookie: UNSUPPORTED for kprobe/sched_cls (verifier: "unknown func bpf_get_netns_cookie#122")
+  - Header parsing: skb->network_header points to inner IP even on first run (more severe than linuxkit)
+  - ip route flush cache: effective — same as linuxkit
+  - All verdict JSON fields identical to linuxkit results
+- **Evidence:** evidence/day-09-vm-preflight.md, evidence/day-09-vm-env.md, evidence/day-09-vm-scenarios.md, evidence/day-09-vm-helper-scope.md
+
+## Target matrix for Day 10+
 
 | Kernel | Architecture | Target | How to obtain |
 |--------|-------------|--------|--------------|
 | 5.15.x LTS | x86_64 | High priority | GitHub Actions Ubuntu 22.04 runner, or AWS t3.small |
-| 5.15.x LTS | aarch64 | Medium | AWS t4g.small or Lima VM with Ubuntu 22.04 arm64 |
 | 6.8.x LTS | x86_64 | Medium | GitHub Actions Ubuntu 24.04 runner |
+| 6.8.x LTS | aarch64 | Medium | Lima VM with Ubuntu 24.04 arm64 |
 | 6.1.x LTS | x86_64 | Optional | Debian 12 VM |
 
-### Why 5.15 LTS is important
+### Why x86_64 still matters
 
-5.15 is the production kernel for Ubuntu 22.04 LTS, which is the most common
-Kubernetes node OS (EKS, GKE, self-managed). Most production VXLAN blackhole
-incidents occur on 5.15. The tool has not been tested there.
+Both tested kernels are aarch64. The kprobe PT_REGS_PARM1 register convention
+differs between aarch64 and x86_64 — the `-D__TARGET_ARCH_*` flag selects the
+correct convention, but this has only been compiled, not verified against a real
+x86_64 kernel with a real binary load.
 
-Known risk areas:
-- `ip_do_fragment` kprobability: should work (T symbol in 5.15), but not verified.
-- `icmp_rcv` kprobe with CO-RE filtering: should work, but BTF field offsets may differ.
-- TC clsact qdisc behavior: stable across kernel versions, low risk.
-- `bpf_get_netns_cookie` availability: NOT available in kprobe on 5.15 either
-  (the restriction predates 6.x — it's a design decision, not a version regression).
+Testing on x86_64 is the next priority to confirm that the `__TARGET_ARCH_x86`
+path resolves ip_do_fragment's first argument (skb) correctly.
 
 ## Commands to run the scenario suite on a target VM
 
