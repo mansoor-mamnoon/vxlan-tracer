@@ -23,6 +23,7 @@ import (
 type jsonReport struct {
 	Verdict               string `json:"verdict"`
 	Message               string `json:"message"`
+	FragmentationScope    string `json:"fragmentation_scope,omitempty"` // "global_corroborated" | "global_unscoped" | absent
 	Overlay               string `json:"overlay"`
 	Underlay              string `json:"underlay"`
 	OverlayMTU            int    `json:"overlay_mtu"`
@@ -187,17 +188,18 @@ func readVerdict(att *loader.Attachment, pinDir string) (diag.Diagnosis, diag.Ob
 // consumers can derive their own logic without re-parsing human-readable text.
 func printJSON(verdict diag.Diagnosis, obs diag.Observation, overlayIface, underlayIface string) {
 	r := jsonReport{
-		Verdict:         string(verdict.Verdict),
-		Message:         verdict.Message,
-		Overlay:         overlayIface,
-		Underlay:        underlayIface,
-		OverlayMTU:      obs.OverlayMTU,
-		UnderlayMTU:     obs.UnderlayMTU,
-		PTBIngressTotal: obs.PTBIngressTotal,
-		ICMPRcvTotal:    obs.ICMPRcvTotal,
-		FragEventsTotal: obs.FragEventsTotal,
-		FragMaxSKBLen:   obs.FragMaxSKBLen,
-		MaxOuterIPLen:   obs.MaxOuterIPLen,
+		Verdict:            string(verdict.Verdict),
+		Message:            verdict.Message,
+		FragmentationScope: string(verdict.FragmentationScope),
+		Overlay:            overlayIface,
+		Underlay:           underlayIface,
+		OverlayMTU:         obs.OverlayMTU,
+		UnderlayMTU:        obs.UnderlayMTU,
+		PTBIngressTotal:    obs.PTBIngressTotal,
+		ICMPRcvTotal:       obs.ICMPRcvTotal,
+		FragEventsTotal:    obs.FragEventsTotal,
+		FragMaxSKBLen:      obs.FragMaxSKBLen,
+		MaxOuterIPLen:      obs.MaxOuterIPLen,
 	}
 	// Compute recommended_overlay_mtu when the current config is unsafe.
 	if obs.UnderlayMTU > 0 && obs.OverlayMTU > 0 {

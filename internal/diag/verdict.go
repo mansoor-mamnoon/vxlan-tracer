@@ -89,11 +89,29 @@ type Observation struct {
 	FragMaxSKBLen uint32
 }
 
+// FragmentationScope classifies the scoping confidence of a VXLAN_FRAGMENTATION_OBSERVED
+// verdict. Included in the Diagnosis and surfaced in JSON output.
+type FragmentationScope string
+
+const (
+	// FragScopeGlobalCorroborated: ip_do_fragment fired AND TC egress confirmed
+	// oversized VXLAN outer packets (max_outer_ip_len > underlay_mtu). Both
+	// signals are present; fragmentation is consistent with VXLAN causation but
+	// the kprobe counter is still global (not VXLAN-specific).
+	FragScopeGlobalCorroborated FragmentationScope = "global_corroborated"
+
+	// FragScopeGlobalUnscoped: ip_do_fragment fired but TC egress did NOT
+	// confirm oversized VXLAN outer packets. The fragmentation may or may not
+	// be VXLAN-related; treat as weak evidence only.
+	FragScopeGlobalUnscoped FragmentationScope = "global_unscoped"
+)
+
 // Diagnosis is the result of Diagnose: a verdict plus the explanation that
 // should accompany it.
 type Diagnosis struct {
-	Verdict Verdict
-	Message string
+	Verdict            Verdict
+	Message            string
+	FragmentationScope FragmentationScope // non-empty only when verdict is VerdictFragmentationObserved
 }
 
 // Diagnose maps an Observation to one of the five verdicts.
@@ -150,7 +168,8 @@ func Diagnose(obs Observation) Diagnosis {
 			// specific (ip_do_fragment fires globally; flow_state may record brief
 			// spikes), but both together are strong evidence for the stale-MTU scenario.
 			return Diagnosis{
-				Verdict: VerdictFragmentationObserved,
+				Verdict:            VerdictFragmentationObserved,
+				FragmentationScope: FragScopeGlobalCorroborated,
 				Message: fmt.Sprintf(
 					"%d ip_do_fragment invocation(s) were observed while vxlan-tracer was attached; "+
 						"concurrently, the TC egress hook recorded an outer packet length of %d bytes, "+
@@ -169,7 +188,8 @@ func Diagnose(obs Observation) Diagnosis {
 		// Fragmentation events observed but no VXLAN-sized flow corroboration.
 		// ip_do_fragment is global; treat this as a weak indicator only.
 		return Diagnosis{
-			Verdict: VerdictFragmentationObserved,
+			Verdict:            VerdictFragmentationObserved,
+			FragmentationScope: FragScopeGlobalUnscoped,
 			Message: fmt.Sprintf(
 				"%d ip_do_fragment invocation(s) were observed while vxlan-tracer was attached. "+
 					"Note: ip_do_fragment is a global kernel function — the counter fires for ALL "+

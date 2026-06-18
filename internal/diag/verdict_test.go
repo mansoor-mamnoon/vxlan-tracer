@@ -47,6 +47,9 @@ func TestDiagnoseFragmentationObserved(t *testing.T) {
 	if d.Verdict != VerdictFragmentationObserved {
 		t.Errorf("Verdict = %s, want %s", d.Verdict, VerdictFragmentationObserved)
 	}
+	if d.FragmentationScope != FragScopeGlobalCorroborated {
+		t.Errorf("FragmentationScope = %s, want %s", d.FragmentationScope, FragScopeGlobalCorroborated)
+	}
 	if !strings.Contains(d.Message, "6") {
 		t.Errorf("Message does not mention frag count: %s", d.Message)
 	}
@@ -74,11 +77,40 @@ func TestDiagnoseFragmentationObservedGlobalOnly(t *testing.T) {
 	if d.Verdict != VerdictFragmentationObserved {
 		t.Errorf("Verdict = %s, want %s", d.Verdict, VerdictFragmentationObserved)
 	}
+	if d.FragmentationScope != FragScopeGlobalUnscoped {
+		t.Errorf("FragmentationScope = %s, want %s", d.FragmentationScope, FragScopeGlobalUnscoped)
+	}
 	if !strings.Contains(d.Message, "global") {
 		t.Errorf("Message should mention global scope: %s", d.Message)
 	}
 	if strings.Contains(d.Message, "VXLAN outer packets triggering") {
 		t.Errorf("Message must not claim VXLAN causation without flow evidence: %s", d.Message)
+	}
+}
+
+func TestDiagnoseFragmentationScopeAbsentForNonFragVerdicts(t *testing.T) {
+	// FragmentationScope must be empty for verdicts other than VXLAN_FRAGMENTATION_OBSERVED.
+	cases := []struct {
+		name string
+		obs  Observation
+		want Verdict
+	}{
+		{"ptb_delivered", Observation{PTBIngressTotal: 5, ICMPRcvTotal: 5}, VerdictPTBDelivered},
+		{"ptb_suppressed", Observation{PTBIngressTotal: 5, ICMPRcvTotal: 0}, VerdictPTBSuppressed},
+		{"mtu_risk", Observation{MaxOuterIPLen: 1438, UnderlayMTU: 1400}, VerdictMTURisk},
+		{"mtu_misconfiguration", Observation{OverlayMTU: 1450, UnderlayMTU: 1400}, VerdictMTUMisconfiguration},
+		{"no_issue", Observation{}, VerdictNoIssueObserved},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Diagnose(tc.obs)
+			if d.Verdict != tc.want {
+				t.Errorf("Verdict = %s, want %s", d.Verdict, tc.want)
+			}
+			if d.FragmentationScope != "" {
+				t.Errorf("FragmentationScope should be empty for %s verdict, got %q", tc.want, d.FragmentationScope)
+			}
+		})
 	}
 }
 
