@@ -254,6 +254,75 @@ _run_second() {
     fi
 }
 
+# _run_port_ptb_delivered runs the PTB_DELIVERED scenario with a non-default
+# VXLAN port.  It creates a fresh lab with the given port, runs vxlan-tracer
+# with auto-detect (--vxlan-port 0), injects PTBs with the same port, and
+# asserts both the verdict and the vxlan_port JSON field.
+_run_port_ptb_delivered() {
+    local port="$1"
+    echo ""
+    echo "=========================================="
+    echo "Scenario: ptb_delivered (port $port)"
+    echo "Expected verdict:    PTB_DELIVERED"
+    echo "Expected vxlan_port: $port"
+    echo "=========================================="
+
+    _cleanup
+
+    echo "[scenario] Setting up lab with VXLAN_PORT=$port..."
+    VXLAN_PORT="$port" bash "$(dirname "$0")/setup-netns.sh" 2>&1 | tail -6 | sed 's/^/  /'
+
+    local logfile="/tmp/scenario-ptb-port${port}.log"
+    # shellcheck disable=SC2086
+    nsenter --net="/var/run/netns/$NETNS" -- "$BINARY" \
+        --overlay "$OVERLAY" --underlay "$UNDERLAY" \
+        --pin-dir "$PIN_DIR" --bpf-dir "$BPF_DIR" \
+        --duration "$DURATION" --json \
+        >"$logfile" 2>&1 &
+    local gopid=$!
+
+    sleep 4
+
+    ip netns exec "$NETNS" iptables -D INPUT -p icmp --icmp-type 3/4 -j DROP 2>/dev/null || true
+    VXLAN_PORT="$port" _traffic_ptb_delivered 2>&1 | sed 's/^/  [traffic] /'
+
+    wait "$gopid"
+    local exit_code=$?
+    local actual_json
+    actual_json=$(grep '^{' "$logfile" | tail -1)
+
+    echo ""
+    echo "[scenario] Binary exit code: $exit_code"
+    echo "[scenario] Raw JSON: $actual_json"
+
+    if [[ $exit_code -ne 0 ]]; then
+        echo "[FAIL] Binary exited with code $exit_code" >&2
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+
+    local actual_verdict actual_port
+    actual_verdict=$(echo "$actual_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict','MISSING'))" 2>/dev/null || echo "JSON_PARSE_ERROR")
+    actual_port=$(echo "$actual_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('vxlan_port','MISSING'))" 2>/dev/null || echo "JSON_PARSE_ERROR")
+
+    local ok=1
+    if [[ "$actual_verdict" != "PTB_DELIVERED" ]]; then
+        echo "[FAIL] Expected verdict=PTB_DELIVERED, got=$actual_verdict" >&2
+        ok=0
+    fi
+    if [[ "$actual_port" != "$port" ]]; then
+        echo "[FAIL] Expected vxlan_port=$port in JSON, got=$actual_port" >&2
+        ok=0
+    fi
+
+    if [[ $ok -eq 1 ]]; then
+        echo "[PASS] verdict=$actual_verdict  vxlan_port=$actual_port"
+        PASS=$((PASS + 1))
+    else
+        FAIL=$((FAIL + 1))
+    fi
+}
+
 # Run the four scenarios
 _run "healthy_small"    "VXLAN_MTU_MISCONFIGURATION"
 _run "fragmentation"    "VXLAN_FRAGMENTATION_OBSERVED"
@@ -263,6 +332,11 @@ _run "ptb_suppressed"   "PTB_SUPPRESSED"
 # Scenario 5: second run of fragmentation in the same namespaces (no teardown)
 # Tests that idempotent cleanup + route cache flush allows a fresh verdict.
 _run_second "fragmentation" "VXLAN_FRAGMENTATION_OBSERVED"
+
+# Scenario 6: PTB_DELIVERED with non-default VXLAN port 8472.
+# Verifies that the BPF vxlan_config map is written with portNBO=bpf_htons(8472)
+# and that PTBs with embedded dport=8472 are counted correctly.
+_run_port_ptb_delivered 8472
 
 # Teardown
 echo ""
