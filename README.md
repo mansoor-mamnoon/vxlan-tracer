@@ -2,10 +2,11 @@
 
 An eBPF-based diagnostic tool for VXLAN MTU blackholes.
 
-**Status: cross-environment v0 prototype — validated on two Linux kernels (6.10.14-linuxkit
-aarch64 and Ubuntu 22.04 5.15.0-181-generic aarch64). All five verdicts pass on both kernels.
-ip_do_fragment scoping limitation documented with verifier and spike evidence on both kernels.
-Not production-validated. x86_64 not yet tested.**
+**Status: cross-architecture v0 prototype — validated on three Linux kernels across two
+architectures (6.10.14-linuxkit aarch64, Ubuntu 22.04 5.15.0-181-generic aarch64, and
+6.8.0-1052-azure x86_64). All five verdicts pass on all three kernels.
+PT_REGS_PARM1 confirmed for both aarch64 and x86_64. ip_do_fragment scoping limitation
+documented. Not production-validated.**
 
 ---
 
@@ -166,30 +167,32 @@ depending on kernel version and route MTU cache state).
 
 See `docs/fragmentation-scoping.md` for the five scoping options considered and why `bpf_get_netns_cookie`-based scoping is not feasible on this kernel.
 
-### What is proven (as of Day 9)
+### What is proven (as of Day 10)
 
-**Kernel coverage:**
+**Kernel and architecture coverage:**
 - 6.10.14-linuxkit aarch64 (Docker Desktop): 5/5 scenarios pass (Day 7–8)
 - 5.15.0-181-generic aarch64 (Ubuntu 22.04 Lima VM): 5/5 scenarios pass (Day 9)
-- Both kernels produce identical verdicts and JSON field values
+- 6.8.0-1052-azure x86_64 (GitHub Actions ubuntu-22.04): 5/5 scenarios pass (Day 10)
+- All three kernels produce identical verdicts and JSON field values
 
 **BPF / kprobe / CO-RE:**
-- All five verdict paths execute end-to-end via `scripts/run-scenarios.sh`
-- BPF verifier accepts all four programs on both kernels
-- CO-RE BTF relocation resolves `skb->len` correctly on both kernels
-- ip_do_fragment kprobe attaches and counts correctly on both kernels
-- icmp_rcv kprobe filters correctly to ICMP type=3/code=4 on both kernels
-- TC sched_cls ingress and egress attach and count correctly on both kernels
+- All five verdict paths execute end-to-end via `scripts/run-scenarios.sh` on all 3 kernels
+- BPF verifier accepts all four programs on all 3 kernels
+- CO-RE BTF relocation resolves `skb->len` correctly on all 3 kernels
+- ip_do_fragment kprobe attaches and counts correctly on all 3 kernels
+- icmp_rcv kprobe filters correctly to ICMP type=3/code=4 on all 3 kernels
+- TC sched_cls ingress and egress attach and count correctly on all 3 kernels
+- PT_REGS_PARM1 confirmed on both architectures:
+  - aarch64: `ctx->regs[0]` (ARM64 ABI x0 register) — Day 7-9
+  - x86_64: `ctx->di` (System V AMD64 ABI rdi register) — Day 10
 
 **Scoping and corroboration:**
-- `bpf_get_netns_cookie` NOT available for kprobe/sched_cls on either kernel:
+- `bpf_get_netns_cookie` NOT available for kprobe/sched_cls on aarch64 kernels:
   - 6.10.14: "program of this type cannot use helper bpf_get_netns_cookie#122"
   - 5.15.0: "unknown func bpf_get_netns_cookie#122"
-  - Both confirmed by cilium/ebpf verifier capture — not assumed
-- ip_do_fragment header parsing via `skb->network_header` unreliable on both kernels
-  (more severe on 5.15: inner IP seen even on first run, not just under route cache)
-- Two-signal corroboration (`global_corroborated`) fires correctly on both kernels
-- `ip route flush cache` effective on both kernels for PMTU reset between runs
+- ip_do_fragment header parsing via `skb->network_header` unreliable on all kernels
+- Two-signal corroboration (`global_corroborated`) fires correctly on all 3 kernels
+- `ip route flush cache` effective on all 3 kernels for PMTU reset between runs
 
 **Idempotency:**
 - Binary reruns in the same container/VM are idempotent after route cache flush
@@ -200,18 +203,18 @@ See `docs/fragmentation-scoping.md` for the five scoping options considered and 
 - ip_do_fragment events are not scoped to VXLAN traffic (the kprobe is global).
   On a busy host with non-VXLAN fragmentation, `frag_events_total` will be
   inflated. The verdict message says so explicitly. VXLAN-specific scoping is not
-  feasible on either tested kernel; see `docs/fragmentation-scoping.md`.
+  feasible on any tested kernel; see `docs/fragmentation-scoping.md`.
 - Production Kubernetes environments are not tested. Lab-only, two-namespace veth topology.
-- x86_64 kernels are not tested. All tests are on aarch64 (two separate kernels).
-  PT_REGS_PARM1 register convention for `__TARGET_ARCH_x86` is compiled but not
-  run-tested. See `docs/kernel-matrix.md`.
+- Other kernel versions: 5.10.x, 6.1.x, 6.5.x not tested.
+- `bpf_get_netns_cookie` not retested on x86_64 (expected same UNSUPPORTED result).
 
-### Validated kernel matrix (as of Day 9)
+### Validated kernel matrix (as of Day 10)
 
 | Kernel | Distro | Arch | Environment | Scenarios |
 |--------|--------|------|-------------|-----------|
 | 6.10.14-linuxkit | Docker Desktop | aarch64 | Docker `--privileged` | 5/5 PASS |
 | 5.15.0-181-generic | Ubuntu 22.04.5 LTS | aarch64 | Lima VM (macOS VZ) | 5/5 PASS |
+| 6.8.0-1052-azure | Ubuntu 22.04.5 LTS | x86_64 | GitHub Actions | 5/5 PASS |
 
 ## Lab setup
 
