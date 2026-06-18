@@ -121,6 +121,26 @@ The `frag_max_skb_len` field in JSON may report either the outer IP length
 populates). Both readings come from `skb->len` at ip_do_fragment entry; which
 one is returned depends on kernel internals. This is documented and not hidden.
 
+## x86_64 BPF compilation notes
+
+When compiling BPF programs on an x86_64 host, `clang -target bpf` does not
+define `__x86_64__`. This causes glibc's `gnu/stubs.h` (pulled in via
+`/usr/include/x86_64-linux-gnu/sys/socket.h`) to try to include `gnu/stubs-32.h`,
+which requires `gcc-multilib` (or `libc6-dev-i386`) to be installed.
+
+The Makefile adds `-D__x86_64__` to the x86_64 arch include flags, which prevents
+`stubs-32.h` from being requested. As belt-and-suspenders, `gcc-multilib` can be
+installed to satisfy the include on systems that do not apply the `-D` workaround.
+
+```sh
+# If you hit "fatal error: 'gnu/stubs-32.h' file not found":
+sudo apt-get install gcc-multilib
+# or just use make bpf, which passes -D__x86_64__ for x86_64
+```
+
+This was discovered on GitHub Actions ubuntu-22.04 (kernel 6.8.0-1052-azure,
+x86_64) on Day 10 of development. The fix is in Makefile:14–20.
+
 ## Capabilities required
 
 | Capability | Why |

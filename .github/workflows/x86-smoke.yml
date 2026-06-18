@@ -68,7 +68,7 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
             clang llvm libbpf-dev linux-tools-generic linux-tools-$(uname -r) \
             iproute2 iputils-ping iptables python3 python3-pip \
-            make gcc build-essential
+            make gcc build-essential gcc-multilib
           sudo pip3 install scapy --quiet
           clang --version | head -1
           go version

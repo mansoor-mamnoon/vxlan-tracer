@@ -14,7 +14,10 @@ _HOST_ARCH := $(shell uname -m 2>/dev/null || echo unknown)
 ifeq ($(_HOST_ARCH),aarch64)
   _ARCH_INC := -I/usr/include/aarch64-linux-gnu
 else ifeq ($(_HOST_ARCH),x86_64)
-  _ARCH_INC := -I/usr/include/x86_64-linux-gnu
+  # -D__x86_64__ prevents glibc stubs.h from pulling in stubs-32.h (from
+  # gcc-multilib). clang with -target bpf does not define __x86_64__ itself,
+  # which causes a fatal error on systems without gcc-multilib installed.
+  _ARCH_INC := -I/usr/include/x86_64-linux-gnu -D__x86_64__
 else
   _ARCH_INC :=
 endif
