@@ -5,8 +5,9 @@ An eBPF-based diagnostic tool for VXLAN MTU blackholes.
 **Status: cross-architecture v0 prototype — validated on three Linux kernels across two
 architectures (6.10.14-linuxkit aarch64, Ubuntu 22.04 5.15.0-181-generic aarch64, and
 6.8.0-1052-azure x86_64). All five verdicts pass on all three kernels.
+VXLAN UDP port is runtime-configurable (--vxlan-port, default: auto-detect from interface).
 PT_REGS_PARM1 confirmed for both aarch64 and x86_64. ip_do_fragment scoping limitation
-documented. Not production-validated.**
+documented. Not production-validated; CNI validation requires a real two-node cluster.**
 
 ---
 
@@ -85,8 +86,12 @@ This tool runs on **Linux only**. It cannot run on macOS or Windows.
 # requires root / CAP_BPF + CAP_NET_ADMIN
 sudo vxlan-tracer --overlay vxlan0 --underlay eth0
 
-# run for 30 seconds then print diagnosis
-sudo vxlan-tracer --overlay vxlan0 --underlay eth0 --duration 30s
+# VXLAN port auto-detected from the overlay interface (default behaviour)
+# For k3s/Flannel (port 8472): auto-detect picks it up from flannel.1
+sudo vxlan-tracer --overlay flannel.1 --underlay eth0 --duration 30s
+
+# Explicit port override (e.g. if the interface is not a real VXLAN device)
+sudo vxlan-tracer --overlay vxlan0 --underlay eth0 --vxlan-port 4789
 
 # JSON output for structured parsing
 sudo vxlan-tracer --overlay vxlan0 --underlay eth0 --json
@@ -198,6 +203,21 @@ See `docs/fragmentation-scoping.md` for the five scoping options considered and 
 - Binary reruns in the same container/VM are idempotent after route cache flush
 - Exit code 0 = verdict produced; exit code 2 = tool/runtime error
 
+### CNI compatibility matrix (as of Day 11)
+
+| CNI | VXLAN port | Auto-detect | Notes |
+|-----|-----------|-------------|-------|
+| k3s/Flannel ≥ 0.9 | 8472 | Yes (via rtnetlink) | k3s bundles Flannel; uses 8472 by default |
+| Flannel standalone ≥ 0.9 | 4789 | Yes | Switched to IANA port after 0.9 |
+| Flannel standalone < 0.9 | 8472 | Yes | Legacy non-IANA default |
+| Calico (VXLAN mode) | 4789 | Yes | Interface: vxlan.calico |
+| Cilium (VXLAN mode) | 4789 | Yes | Interface: cilium_vxlan |
+
+None of the above have been validated with a real two-node cluster. The
+table reflects the VXLAN port used by each CNI per its documentation and
+source code. See `docs/kubernetes-validation.md` for the strict definition
+of what constitutes a validated CNI entry.
+
 ### What is not proven
 
 - ip_do_fragment events are not scoped to VXLAN traffic (the kprobe is global).
@@ -205,6 +225,10 @@ See `docs/fragmentation-scoping.md` for the five scoping options considered and 
   inflated. The verdict message says so explicitly. VXLAN-specific scoping is not
   feasible on any tested kernel; see `docs/fragmentation-scoping.md`.
 - Production Kubernetes environments are not tested. Lab-only, two-namespace veth topology.
+  See `docs/kubernetes-validation.md` for the two-node requirement.
+- VXLAN port auto-detect (rtnetlink) not run against a real VXLAN interface on Linux.
+  The code path compiles and the `vishvananda/netlink.Vxlan.Port` field is well-documented,
+  but an on-kernel run is required for full confidence.
 - Other kernel versions: 5.10.x, 6.1.x, 6.5.x not tested.
 - `bpf_get_netns_cookie` not retested on x86_64 (expected same UNSUPPORTED result).
 

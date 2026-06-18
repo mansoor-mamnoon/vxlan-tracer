@@ -80,7 +80,7 @@ namespace environment. No production deployment required.
 
 ### V0 scope limitations
 
-- IPv4 VXLAN only (UDP port 4789)
+- IPv4 VXLAN only; VXLAN UDP port is configurable (default: auto-detect; was hardcoded 4789 until Day 11)
 - Single overlay + single underlay interface pair
 - No per-VNI attribution (VNI = 0 in V0)
 - No active PMTUD probe synthesis
