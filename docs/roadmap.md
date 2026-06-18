@@ -57,6 +57,16 @@ namespace environment. No production deployment required.
 - [x] install/uninstall Makefile targets with Linux-only guard and PREFIX support (Day 8)
 - [x] docs/kernel-matrix.md — Docker does not change kernels; real VMs required for kernel testing (Day 8)
 - [x] docs/fragmentation-scoping.md — five scoping options analyzed; two-signal chosen with evidence (Day 8)
+- [x] docs/vm-validation.md — setup guide for Ubuntu 22.04/24.04 VMs; evidence checklist (Day 9)
+- [x] scripts/preflight.sh — 20-check preflight (OS, kernel, BTF, bpffs, commands, symbols, scapy) (Day 9)
+- [x] Makefile: frag_kprobes.bpf.o added to bpf target; preflight target added (Day 9)
+- [x] scripts/run-scenarios.sh preflight guards — BPF_DIR, required commands, BTF, bpffs (Day 9)
+- [x] Real VM validation: Ubuntu 22.04 5.15.0-181-generic aarch64 (Lima VM) — 5/5 PASS (Day 9)
+       NOTE: first non-linuxkit kernel tested; identical verdicts and JSON fields
+- [x] bpf_get_netns_cookie UNSUPPORTED confirmed on 5.15.0-181-generic (different error: "unknown func") (Day 9)
+- [x] skb->network_header inconsistency more severe on 5.15: inner IP even on first run (Day 9)
+- [x] ip route flush cache effective on 5.15.0-181-generic (Day 9)
+- [x] Two kernels in validated matrix: 6.10.14-linuxkit and 5.15.0-181-generic (Day 9)
 
 ### V0 scope limitations
 

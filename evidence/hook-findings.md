@@ -402,3 +402,63 @@ obsolete" does not apply on 6.10.14-linuxkit — flush is effective.
 | icmp_rcv fires AFTER netfilter INPUT | counter experiment | **CONFIRMED** |
 | iptables DROP before icmp_rcv | counter experiment | **CONFIRMED** |
 | bpftrace can read skb->dev->name in kprobe | Not verified (bpftrace broken on linuxkit) | Unknown |
+
+## Day 9 findings (Lima VM — Ubuntu 22.04 5.15.0-181-generic aarch64)
+
+### Finding 27: All five verdict scenarios pass on 5.15.0-181-generic
+
+First validation on a non-linuxkit kernel. 5/5 scenarios pass with identical
+JSON field values to 6.10.14-linuxkit:
+- frag_events_total=6, frag_max_skb_len=1438, max_outer_ip_len=1438 (same)
+- fragmentation_scope=global_corroborated (same)
+- ptb_ingress_total=5, icmp_rcv_total=5 (delivered) and 0 (suppressed) (same)
+BPF verifier accepted all four objects. CO-RE BTF resolved correctly.
+Evidence: evidence/day-09-vm-scenarios.md
+
+### Finding 28: bpf_get_netns_cookie UNSUPPORTED on 5.15.0-181-generic kprobe/sched_cls
+
+Same practical result as 6.10.14-linuxkit; error message differs:
+- 5.15.0: "unknown func bpf_get_netns_cookie#122" (helper unrecognized for this prog type)
+- 6.10.14: "program of this type cannot use helper bpf_get_netns_cookie#122"
+/proc/kallsyms: same pattern — wrappers exist only for socket-type programs.
+Two-signal corroboration strategy confirmed applicable to 5.15.
+Evidence: evidence/day-09-vm-helper-scope.md
+
+### Finding 29: skb->network_header at ip_do_fragment MORE severely inconsistent on 5.15.0
+
+On 6.10.14-linuxkit: first run (before route cache) sometimes showed ip_proto=17/dport=4789 (outer IP).
+On 5.15.0-181-generic: even first run shows ip_proto=1 (ICMP), udp_dport=0 — inner IP.
+The outer VXLAN IP header is never visible via network_header on 5.15 in this test.
+This strengthens the Day 8 decision to defer header parsing and use two-signal corroboration.
+Evidence: evidence/day-09-vm-helper-scope.md
+
+### Finding 30: ip route flush cache effective on 5.15.0-181-generic
+
+Second-run scenario (scenario 5) passed with fragmentation_scope=global_corroborated
+after ip route flush cache in both namespaces. Same behavior as 6.10.14-linuxkit.
+Evidence: evidence/day-09-vm-scenarios.md (scenario 5 result)
+
+### Finding 31: bpftool is kernel-matched on Ubuntu 22.04 VM
+
+`/usr/lib/linux-tools/5.15.0-181-generic/bpftool v5.15.199` — matches running kernel.
+On linuxkit, bpftool was a mismatched wrapper (v5.15.199 on kernel 6.10.14).
+Ubuntu's `linux-tools-$(uname -r)` package provides the kernel-matched bpftool.
+No functional impact on vxlan-tracer (does not use bpftool at runtime) but useful
+for map inspection during debugging.
+
+## Updated hook confidence table (post-Day 9)
+
+| Hook | Verified how | Confidence |
+|------|-------------|------------|
+| ip_do_fragment symbol present | 6.10.14 and 5.15.0 /proc/kallsyms | **CONFIRMED (both kernels)** |
+| ip_do_fragment fires for DF=0 oversized outer | 5/5 scenario pass on both kernels | **CONFIRMED (both kernels)** |
+| ip_do_fragment kprobe via cilium/ebpf loader | scenario run on both kernels | **CONFIRMED (both kernels)** |
+| ip_do_fragment CO-RE skb->len resolves | frag_max_skb_len=1438 on both kernels | **CONFIRMED (both kernels)** |
+| bpf_get_netns_cookie in kprobe: NOT available | "unknown func" on 5.15; "cannot use" on 6.10 | **CONFIRMED (both kernels)** |
+| bpf_get_netns_cookie in sched_cls: NOT available | same errors | **CONFIRMED (both kernels)** |
+| skb->network_header at ip_do_fragment: inconsistent | inner IP seen on both; worse on 5.15 | **CONFIRMED (both kernels)** |
+| Two-signal corroboration: 5/5 pass | scenario runner on both kernels | **CONFIRMED (both kernels)** |
+| ip route flush cache: clears PMTU | second-run scenario pass on both kernels | **CONFIRMED (both kernels)** |
+| icmp_rcv IS a T symbol | 6.10.14 and 5.15.0 /proc/kallsyms | **CONFIRMED (both kernels)** |
+| icmp_rcv fires AFTER netfilter INPUT | counter experiment + PTB scenarios | **CONFIRMED (both kernels)** |
+| bpftrace can read skb->dev->name in kprobe | Not verified (bpftrace broken on linuxkit; not tried on 5.15) | Unknown |

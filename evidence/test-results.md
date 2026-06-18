@@ -643,3 +643,94 @@ network_header pointed to inner IP header, not outer.
 **Caveat:** First-run events (before route cache) correctly showed ip_proto=17, dport=4789.
 Inconsistency is cache-state-dependent. Not usable as reliable VXLAN filter.
 See evidence/day-08-frag-scope-spike.md.
+
+---
+
+## 2026-06-17 — Day 9: preflight check on Lima VM (5.15.0-181-generic)
+
+**Environment:** Lima VM, Ubuntu 22.04.5 LTS, 5.15.0-181-generic aarch64, root
+**Command:** `sudo bash scripts/preflight.sh`
+**Expected:** All checks pass
+**Actual:**
+```
+PASS: 20  WARN: 0  FAIL: 0
+RESULT: PASS — all checks passed.
+```
+Notable: ip_do_fragment and icmp_rcv confirmed T symbols. bpftool kernel-matched (v5.15.199).
+**Result:** PASS (20/20)
+**Caveat:** aarch64 only. x86_64 not tested.
+
+---
+
+## 2026-06-17 — Day 9: BPF compile on Lima VM (5.15.0-181-generic)
+
+**Environment:** Lima VM, Ubuntu 22.04.5 LTS, 5.15.0-181-generic aarch64, clang 14
+**Command:** `make bpf`
+**Expected:** All four BPF objects compile; 0 warnings
+**Actual:**
+```
+prereqs OK  clang=Ubuntu clang version 14.0.0-1ubuntu1.1  arch=aarch64
+CC  bpf/tc_ingress_eth0.bpf.o   (18K)
+CC  bpf/tc_egress_vxlan0.bpf.o  (17K)
+CC  bpf/kprobes.bpf.o            (7.6K)
+CC  bpf/frag_kprobes.bpf.o       (7.5K)
+BPF build complete.
+```
+Bug fixed in this run: frag_kprobes.bpf.o was previously missing from make bpf target.
+**Result:** PASS (0 warnings, all 4 objects)
+**Caveat:** aarch64 only. x86_64 BPF compile (CFLAGS_BPF with __TARGET_ARCH_x86) not tested.
+
+---
+
+## 2026-06-17 — Day 9: scenario suite on Lima VM (5.15.0-181-generic) — 5/5 PASS
+
+**Environment:** Lima VM, Ubuntu 22.04.5 LTS, 5.15.0-181-generic aarch64, root
+**Command:** `BINARY=dist/vxlan-tracer BPF_DIR=bpf DURATION=15s bash scripts/run-scenarios.sh`
+**Expected:** 5/5 pass with same verdicts as linuxkit
+**Actual:**
+```
+Results: 5 passed, 0 failed
+```
+Per-scenario:
+- healthy_small     → VXLAN_MTU_MISCONFIGURATION   PASS  (max_outer_ip_len=118)
+- fragmentation     → VXLAN_FRAGMENTATION_OBSERVED  PASS  (frag_events_total=6, scope=global_corroborated)
+- ptb_delivered     → PTB_DELIVERED                 PASS  (ptb_ingress_total=5, icmp_rcv_total=5)
+- ptb_suppressed    → PTB_SUPPRESSED                PASS  (ptb_ingress_total=5, icmp_rcv_total=0)
+- fragmentation x2  → VXLAN_FRAGMENTATION_OBSERVED  PASS  (scope=global_corroborated, max_outer_ip_len=1438)
+
+**Result:** PASS (5/5) — first non-linuxkit kernel validation
+**Caveat:** aarch64 only. All JSON field values identical to 6.10.14-linuxkit. See evidence/day-09-vm-scenarios.md.
+
+---
+
+## 2026-06-17 — Day 9: bpf_get_netns_cookie probe on Lima VM (5.15.0-181-generic)
+
+**Environment:** Lima VM, Ubuntu 22.04.5 LTS, 5.15.0-181-generic aarch64
+**Command:** `probe_helper --kprobe probe_netns_cookie_kprobe.bpf.o --cls probe_netns_cookie_cls.bpf.o`
+**Expected:** UNSUPPORTED (same as linuxkit, different error message)
+**Actual:**
+```
+[kprobe] FAILED: unknown func bpf_get_netns_cookie#122
+[sched_cls] FAILED: unknown func bpf_get_netns_cookie#122
+kprobe bpf_get_netns_cookie: UNSUPPORTED
+sched_cls bpf_get_netns_cookie: UNSUPPORTED
+```
+Error message differs from linuxkit ("program of this type cannot use helper" vs "unknown func").
+**Result:** CONFIRMED UNSUPPORTED on 5.15.0-181-generic
+**Caveat:** Different error wording between kernel versions; same practical conclusion.
+
+---
+
+## 2026-06-17 — Day 9: header parsing spike on Lima VM (5.15.0-181-generic)
+
+**Environment:** Lima VM, Ubuntu 22.04.5 LTS, 5.15.0-181-generic aarch64
+**Command:** `probe_frag_scope --obj probe_frag_scope.bpf.o --duration 12s` + 3 large pings
+**Expected:** network_header inconsistency (as on linuxkit); inner IP may be visible
+**Actual:**
+```
+skb_len: 1388, ip_proto: 1 (ICMP), udp_dport: 0, is_vxlan: 0
+frag_vxlan_count: 2
+```
+Even on first run (no prior route cache), inner IP seen. On linuxkit, first run sometimes showed outer IP.
+**Result:** CONFIRMED MORE SEVERE — header parsing never sees outer IP on 5.15.0-181-generic
+**Caveat:** Two-signal corroboration strategy is the correct approach and is confirmed here.
