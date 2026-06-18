@@ -43,7 +43,9 @@ endif
 # clang emits BTF relocations that libbpf resolves at load time.
 CFLAGS_BPF_KPROBE := $(CFLAGS_BPF) $(_TARGET_ARCH_DEFINE)
 
-.PHONY: all build build-linux-arm64 build-linux-amd64 package \
+PREFIX ?= /usr/local
+
+.PHONY: all build build-linux-arm64 build-linux-amd64 package install uninstall \
         bpf bpf-check generate lint vet test \
         lab-up lab-down smoke-small smoke-large scenarios cleanup-bpf \
         attach-bpf check-symbols clean help
@@ -82,6 +84,30 @@ package: build-linux-arm64 build-linux-amd64
 
 test:
 	go test ./...
+
+# --- Install / Uninstall (Linux only) ---
+# Installs the Go binary to PREFIX/bin. Does NOT install BPF objects
+# (those must be compiled on Linux and passed via --bpf-dir at runtime).
+# Does NOT install a systemd unit or daemon — vxlan-tracer is a one-shot CLI.
+#
+# Usage:
+#   make install                        # installs to /usr/local/bin/
+#   PREFIX=/tmp/vxlan-install make install  # installs to /tmp/vxlan-install/bin/
+install:
+	@if [ "$$(uname -s)" != "Linux" ]; then \
+	    echo "ERROR: install target requires Linux (binary is Linux-only)"; exit 1; fi
+	@mkdir -p "$(PREFIX)/bin"
+	@ARCH="$$(uname -m)"; \
+	if [ "$$ARCH" = "aarch64" ]; then SRC="dist/$(BINARY)-linux-arm64"; \
+	elif [ "$$ARCH" = "x86_64" ]; then SRC="dist/$(BINARY)-linux-amd64"; \
+	else echo "ERROR: unsupported arch $$ARCH"; exit 1; fi; \
+	if [ ! -f "$$SRC" ]; then echo "ERROR: $$SRC not found; run make build-linux-arm64 or make build-linux-amd64 first"; exit 1; fi; \
+	install -m 0755 "$$SRC" "$(PREFIX)/bin/$(BINARY)"; \
+	echo "  installed: $(PREFIX)/bin/$(BINARY)"
+
+uninstall:
+	@rm -f "$(PREFIX)/bin/$(BINARY)"
+	@echo "  removed: $(PREFIX)/bin/$(BINARY) (if it existed)"
 
 generate:
 	go generate ./...
@@ -200,13 +226,15 @@ clean:
 
 help:
 	@echo "Targets:"
-	@echo "  build              Go binary (native platform, output: dist/vxlan-tracer)"
-	@echo "  build-linux-arm64  Cross-compile for Linux/aarch64"
-	@echo "  build-linux-amd64  Cross-compile for Linux/x86_64"
-	@echo "  package            Build both Linux targets + release bundle in dist/release/"
-	@echo "  test               go test ./..."
-	@echo "  vet                go vet"
-	@echo "  bpf                Compile BPF objects (Linux only)"
+	@echo "  build                    Go binary (native platform, output: dist/vxlan-tracer)"
+	@echo "  build-linux-arm64        Cross-compile for Linux/aarch64"
+	@echo "  build-linux-amd64        Cross-compile for Linux/x86_64"
+	@echo "  package                  Build both Linux targets + release bundle in dist/release/"
+	@echo "  install [PREFIX=...]     Install binary to PREFIX/bin (Linux only, default /usr/local)"
+	@echo "  uninstall [PREFIX=...]   Remove installed binary"
+	@echo "  test                     go test ./..."
+	@echo "  vet                      go vet"
+	@echo "  bpf                      Compile BPF objects (Linux only)"
 	@echo "  bpf-check     Check BPF build prerequisites"
 	@echo "  attach-bpf    Attach BPF to lab interfaces (Linux, lab must be up)"
 	@echo "  lab-up        Create netns + VXLAN lab topology"
