@@ -31,20 +31,72 @@ DURATION="${DURATION:-15s}"
 PASS=0
 FAIL=0
 
+# --- Preflight checks ---
 if [[ "$(uname -s)" == "Darwin" ]]; then
     echo "ERROR: This script requires Linux." >&2
     exit 1
 fi
 
 if [[ $EUID -ne 0 ]]; then
-    echo "ERROR: Must run as root" >&2
+    echo "ERROR: Must run as root (sudo or root user)." >&2
     exit 1
 fi
 
 if [[ ! -x "$BINARY" ]]; then
     echo "ERROR: binary not found or not executable: $BINARY" >&2
+    echo "  Build with: make build  (on Linux) or GOOS=linux GOARCH=arm64 go build ..." >&2
     exit 1
 fi
+
+if [[ ! -d "$BPF_DIR" ]]; then
+    echo "ERROR: BPF_DIR not found: $BPF_DIR" >&2
+    echo "  Compile BPF objects with: make bpf  (on Linux with clang installed)" >&2
+    exit 1
+fi
+
+for _bpf_obj in tc_ingress_eth0.bpf.o tc_egress_vxlan0.bpf.o kprobes.bpf.o frag_kprobes.bpf.o; do
+    if [[ ! -f "$BPF_DIR/$_bpf_obj" ]]; then
+        echo "ERROR: BPF object missing: $BPF_DIR/$_bpf_obj" >&2
+        echo "  Run: make bpf  (from the repo root on Linux)" >&2
+        exit 1
+    fi
+done
+
+for _cmd in ip iptables python3 nsenter; do
+    if ! command -v "$_cmd" &>/dev/null; then
+        echo "ERROR: required command not found: $_cmd" >&2
+        case "$_cmd" in
+            ip|iptables) echo "  Install: apt-get install -y iproute2 iptables" >&2 ;;
+            python3)     echo "  Install: apt-get install -y python3 python3-pip && pip3 install scapy" >&2 ;;
+            nsenter)     echo "  Install: apt-get install -y util-linux" >&2 ;;
+        esac
+        exit 1
+    fi
+done
+
+if ! python3 -c "import scapy" 2>/dev/null; then
+    echo "ERROR: python3 scapy module not found (required for PTB injection)." >&2
+    echo "  Install: pip3 install scapy" >&2
+    exit 1
+fi
+
+if ! mount | grep -q 'type bpf'; then
+    echo "WARN: bpffs does not appear to be mounted at /sys/fs/bpf." >&2
+    echo "  Attempting to mount: mount -t bpf bpf /sys/fs/bpf" >&2
+    mount -t bpf bpf /sys/fs/bpf 2>/dev/null || {
+        echo "ERROR: bpffs mount failed. Run: sudo bash scripts/setup-bpf-fs.sh" >&2
+        exit 1
+    }
+fi
+
+if [[ ! -f /sys/kernel/btf/vmlinux ]]; then
+    echo "ERROR: /sys/kernel/btf/vmlinux not found." >&2
+    echo "  CO-RE BPF programs require kernel built with CONFIG_DEBUG_INFO_BTF=y." >&2
+    echo "  Ubuntu 20.04+ ships BTF by default. Try a different kernel." >&2
+    exit 1
+fi
+
+echo "[preflight] OK: Linux $(uname -r), root, binary=$BINARY, BPF_DIR=$BPF_DIR, BTF present"
 
 _cleanup() {
     echo "[scenario] Cleanup..."

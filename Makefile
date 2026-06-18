@@ -46,7 +46,7 @@ CFLAGS_BPF_KPROBE := $(CFLAGS_BPF) $(_TARGET_ARCH_DEFINE)
 PREFIX ?= /usr/local
 
 .PHONY: all build build-linux-arm64 build-linux-amd64 package install uninstall \
-        bpf bpf-check generate lint vet test \
+        bpf bpf-check generate lint vet test preflight \
         lab-up lab-down smoke-small smoke-large scenarios cleanup-bpf \
         attach-bpf check-symbols clean help
 
@@ -84,6 +84,13 @@ package: build-linux-arm64 build-linux-amd64
 
 test:
 	go test ./...
+
+# preflight: check runtime requirements before attempting BPF load or lab setup.
+# Requires Linux + root. Checks OS, kernel, BTF, bpffs, required commands, libbpf headers,
+# kernel symbols, and scapy. Prints PASS/WARN/FAIL per check.
+# Does not compile or load BPF; safe to run before 'make bpf'.
+preflight:
+	@sudo bash scripts/preflight.sh
 
 # --- Install / Uninstall (Linux only) ---
 # Installs the Go binary to PREFIX/bin. Does NOT install BPF objects
@@ -233,6 +240,7 @@ help:
 	@echo "  install [PREFIX=...]     Install binary to PREFIX/bin (Linux only, default /usr/local)"
 	@echo "  uninstall [PREFIX=...]   Remove installed binary"
 	@echo "  test                     go test ./..."
+	@echo "  preflight                Check all runtime requirements (Linux + root)"
 	@echo "  vet                      go vet"
 	@echo "  bpf                      Compile BPF objects (Linux only)"
 	@echo "  bpf-check     Check BPF build prerequisites"
