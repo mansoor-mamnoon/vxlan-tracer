@@ -77,6 +77,16 @@ namespace environment. No production deployment required.
 - [x] docs/x86-cloud-validation.md — cloud VM setup guide for x86_64 (Day 10)
 - [x] Makefile arch detection hardened: explicit FAIL for unsupported arch; bpf_target logged (Day 10)
 - [x] docs/kernel-matrix.md updated: real tested data only; entry 3 added for x86_64 (Day 10)
+- [x] VXLAN UDP port runtime-configurable via BPF config map + --vxlan-port CLI flag (Day 11)
+       NOTE: default changed from 4789 to 0 (auto-detect from overlay interface via rtnetlink)
+- [x] internal/netlink.DetectVXLAN: reads dstport and VNI from overlay interface via rtnetlink (Day 11)
+       NOTE: not run against a real VXLAN interface — needs Linux k3s node
+- [x] vxlan_port and vxlan_vni JSON output fields (Day 11)
+- [x] inject_ptb.py --vxlan-port argument (default 4789) (Day 11)
+- [x] docs/kubernetes-validation.md: two-node requirement, proof checklist, CNI notes (Day 11)
+- [x] k8s/ manifests: namespace + traffic-pods with podAntiAffinity for cross-node enforcement (Day 11)
+- [ ] Real two-node k3s/flannel validation: cross-node pod traffic on flannel.1 port 8472
+- [ ] CNI validation: PTB_DELIVERED or VXLAN_FRAGMENTATION_OBSERVED confirmed on real CNI traffic
 
 ### V0 scope limitations
 
