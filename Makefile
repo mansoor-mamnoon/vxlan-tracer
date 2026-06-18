@@ -167,7 +167,12 @@ bpf-check:
 	    { echo "ERROR: libbpf headers missing.  apt install libbpf-dev"; exit 1; }
 	@test -f /usr/include/linux/bpf.h || \
 	    { echo "ERROR: linux UAPI headers missing.  apt install linux-libc-dev"; exit 1; }
-	@echo "  prereqs OK  clang=$$(clang --version 2>/dev/null | head -1)  arch=$(_HOST_ARCH)"
+	@if [ "$(_HOST_ARCH)" != "aarch64" ] && [ "$(_HOST_ARCH)" != "x86_64" ]; then \
+	    echo "ERROR: unsupported architecture: $(_HOST_ARCH)"; \
+	    echo "       vxlan-tracer BPF programs require aarch64 or x86_64."; \
+	    exit 1; \
+	fi
+	@echo "  prereqs OK  clang=$$(clang --version 2>/dev/null | head -1)  arch=$(_HOST_ARCH)  bpf_target=$(_TARGET_ARCH_DEFINE)"
 
 # --- TC BPF attach (Linux only, requires lab-up first) ---
 attach-bpf: bpf
