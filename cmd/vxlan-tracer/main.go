@@ -13,6 +13,7 @@ import (
 	"github.com/mansoormmamnoon/vxlan-tracer/internal/bpfmap"
 	"github.com/mansoormmamnoon/vxlan-tracer/internal/diag"
 	"github.com/mansoormmamnoon/vxlan-tracer/internal/loader"
+	inetlink "github.com/mansoormmamnoon/vxlan-tracer/internal/netlink"
 )
 
 // jsonReport is the structure emitted when --json is passed. Field names are
@@ -26,6 +27,8 @@ type jsonReport struct {
 	FragmentationScope    string `json:"fragmentation_scope,omitempty"` // "global_corroborated" | "global_unscoped" | absent
 	Overlay               string `json:"overlay"`
 	Underlay              string `json:"underlay"`
+	VXLANPort             uint16 `json:"vxlan_port,omitempty"` // effective VXLAN UDP dst port
+	VXLANVNI              uint32 `json:"vxlan_vni,omitempty"`  // VNI from rtnetlink (0 if unknown)
 	OverlayMTU            int    `json:"overlay_mtu"`
 	UnderlayMTU           int    `json:"underlay_mtu"`
 	RecommendedOverlayMTU int    `json:"recommended_overlay_mtu,omitempty"`
@@ -41,7 +44,7 @@ const version = "0.1.0-dev"
 func main() {
 	overlay := flag.String("overlay", "", "VXLAN overlay interface (e.g. vxlan0)")
 	underlay := flag.String("underlay", "", "Underlay physical interface (e.g. eth0)")
-	vxlanPort := flag.Uint("vxlan-port", 4789, "VXLAN UDP destination port")
+	vxlanPort := flag.Uint("vxlan-port", 0, "VXLAN UDP destination port (0 = auto-detect from overlay interface)")
 	pinDir := flag.String("pin-dir", "/sys/fs/bpf/vxlan-tracer", "bpffs directory to pin maps under (must exist; see scripts/setup-bpf-fs.sh)")
 	bpfDir := flag.String("bpf-dir", "bpf", "directory containing compiled tc_ingress_eth0.bpf.o, tc_egress_vxlan0.bpf.o, kprobes.bpf.o")
 	duration := flag.Duration("duration", 0, "Run for this long then exit (0 = run until SIGINT/SIGTERM)")
@@ -64,6 +67,23 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Resolve VXLAN port and VNI.  When --vxlan-port is 0 (the default),
+	// attempt to read them from the overlay interface via rtnetlink.  On
+	// non-VXLAN interfaces (lab veth topology) or non-Linux builds the
+	// detection will fail; fall back silently to 4789.
+	var vxlanVNI uint32
+	effectivePort := uint16(*vxlanPort)
+	if effectivePort == 0 {
+		info, err := inetlink.DetectVXLAN(*overlay)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "vxlan auto-detect: %v — using default port 4789\n", err)
+			effectivePort = 4789
+		} else {
+			effectivePort = info.Port
+			vxlanVNI = info.VNI
+		}
+	}
+
 	cfg := loader.Config{
 		Overlay:       *overlay,
 		Underlay:      *underlay,
@@ -72,13 +92,20 @@ func main() {
 		TCEgressObj:   filepath.Join(*bpfDir, "tc_egress_vxlan0.bpf.o"),
 		KprobeObj:     filepath.Join(*bpfDir, "kprobes.bpf.o"),
 		FragKprobeObj: filepath.Join(*bpfDir, "frag_kprobes.bpf.o"),
-		VXLANPort:     uint16(*vxlanPort),
+		VXLANPort:     effectivePort,
 	}
 
 	fmt.Fprintf(os.Stderr, "vxlan-tracer %s\n", version)
 	fmt.Fprintf(os.Stderr, "overlay:    %s\n", cfg.Overlay)
 	fmt.Fprintf(os.Stderr, "underlay:   %s\n", cfg.Underlay)
-	fmt.Fprintf(os.Stderr, "vxlan port: %d\n", *vxlanPort)
+	fmt.Fprintf(os.Stderr, "vxlan port: %d", effectivePort)
+	if *vxlanPort == 0 {
+		fmt.Fprintf(os.Stderr, " (auto-detected)")
+	}
+	fmt.Fprintln(os.Stderr)
+	if vxlanVNI != 0 {
+		fmt.Fprintf(os.Stderr, "vxlan vni:  %d\n", vxlanVNI)
+	}
 	fmt.Fprintf(os.Stderr, "pin dir:    %s\n", cfg.PinDir)
 	fmt.Fprintf(os.Stderr, "bpf dir:    %s\n", *bpfDir)
 
@@ -126,7 +153,7 @@ func main() {
 	}
 
 	if *jsonOut {
-		printJSON(verdict, obs, cfg.Overlay, cfg.Underlay)
+		printJSON(verdict, obs, cfg.Overlay, cfg.Underlay, effectivePort, vxlanVNI)
 	} else {
 		fmt.Printf("verdict: %s\n", verdict.Verdict)
 		fmt.Printf("%s\n", verdict.Message)
@@ -187,13 +214,15 @@ func readVerdict(att *loader.Attachment, pinDir string) (diag.Diagnosis, diag.Ob
 // printJSON emits a machine-readable JSON report on stdout. All diagnostic
 // counters and MTU values from the observation window are included so
 // consumers can derive their own logic without re-parsing human-readable text.
-func printJSON(verdict diag.Diagnosis, obs diag.Observation, overlayIface, underlayIface string) {
+func printJSON(verdict diag.Diagnosis, obs diag.Observation, overlayIface, underlayIface string, vxlanPort uint16, vxlanVNI uint32) {
 	r := jsonReport{
 		Verdict:            string(verdict.Verdict),
 		Message:            verdict.Message,
 		FragmentationScope: string(verdict.FragmentationScope),
 		Overlay:            overlayIface,
 		Underlay:           underlayIface,
+		VXLANPort:          vxlanPort,
+		VXLANVNI:           vxlanVNI,
 		OverlayMTU:         obs.OverlayMTU,
 		UnderlayMTU:        obs.UnderlayMTU,
 		PTBIngressTotal:    obs.PTBIngressTotal,
