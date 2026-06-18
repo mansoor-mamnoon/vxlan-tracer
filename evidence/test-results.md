@@ -734,3 +734,25 @@ frag_vxlan_count: 2
 Even on first run (no prior route cache), inner IP seen. On linuxkit, first run sometimes showed outer IP.
 **Result:** CONFIRMED MORE SEVERE — header parsing never sees outer IP on 5.15.0-181-generic
 **Caveat:** Two-signal corroboration strategy is the correct approach and is confirmed here.
+
+---
+
+## 2026-06-18 — Day 10: full scenario suite on x86_64 6.8.0-1052-azure (GitHub Actions)
+
+**Environment:** GitHub Actions ubuntu-22.04 runner, Azure westus, kernel 6.8.0-1052-azure, x86_64, root (sudo)
+**Command:** `sudo BINARY=dist/vxlan-tracer BPF_DIR=bpf DURATION=15s bash scripts/run-scenarios.sh`
+**Run:** GitHub Actions run 27743797987 (commit b66a4c4)
+**Expected:** 5/5 pass — first x86_64 run
+**Actual:**
+```
+Results: 5 passed, 0 failed
+```
+Per-scenario:
+- healthy_small     → VXLAN_MTU_MISCONFIGURATION   PASS  (max_outer_ip_len=118)
+- fragmentation     → VXLAN_FRAGMENTATION_OBSERVED  PASS  (frag_events_total=6, frag_max_skb_len=1438, scope=global_corroborated)
+- ptb_delivered     → PTB_DELIVERED                 PASS  (ptb_ingress_total=5, icmp_rcv_total=5)
+- ptb_suppressed    → PTB_SUPPRESSED                PASS  (ptb_ingress_total=5, icmp_rcv_total=0)
+- fragmentation x2  → VXLAN_FRAGMENTATION_OBSERVED  PASS  (scope=global_corroborated, frag_max_skb_len=1438)
+
+**Result:** PASS (5/5) — first confirmed x86_64 run; PT_REGS_PARM1 x86 convention works
+**Caveat:** Runner uses Azure kernel (6.8.0-1052-azure), not canonical Ubuntu 5.15.x. clsact qdisc probe in preflight fails at global netns level (runner restriction), but TC ops inside netns succeed. See evidence/day-10-x86-vm-scenarios.md.

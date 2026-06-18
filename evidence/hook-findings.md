@@ -462,3 +462,67 @@ for map inspection during debugging.
 | icmp_rcv IS a T symbol | 6.10.14 and 5.15.0 /proc/kallsyms | **CONFIRMED (both kernels)** |
 | icmp_rcv fires AFTER netfilter INPUT | counter experiment + PTB scenarios | **CONFIRMED (both kernels)** |
 | bpftrace can read skb->dev->name in kprobe | Not verified (bpftrace broken on linuxkit; not tried on 5.15) | Unknown |
+
+### Finding 32: PT_REGS_PARM1 x86_64 (ctx->di) resolves ip_do_fragment's skb correctly
+
+Kernel 6.8.0-1052-azure x86_64, GitHub Actions run 27743797987.
+kprobes.bpf.c and frag_kprobes.bpf.c compiled with `-D__TARGET_ARCH_x86`.
+frag_max_skb_len=1438 (identical to aarch64). All five verdict JSON fields
+match aarch64 results exactly. PT_REGS_PARM1 (ctx->di = rdi = first argument
+in System V AMD64 ABI) correctly returns the `struct sk_buff *skb` passed to
+ip_do_fragment.
+Evidence: evidence/day-10-x86-vm-scenarios.md
+
+### Finding 33: x86_64 BPF compile requires -D__x86_64__ when using -I/usr/include/x86_64-linux-gnu
+
+Without `-D__x86_64__`, `clang -target bpf` does not define `__x86_64__`, causing
+glibc's `gnu/stubs.h` to request `gnu/stubs-32.h` (not installed without gcc-multilib).
+Fix: add `-D__x86_64__` to CFLAGS in Makefile for x86_64 builds.
+Affects: ALL BPF programs targeting x86_64 that use system headers.
+Not an issue on aarch64 (different glibc stubs structure).
+Evidence: evidence/day-10-github-actions-run1.md (failure), Makefile:17
+
+### Finding 34: ip link add dummy blocked at global netns level on GitHub Actions runners
+
+Preflight clsact qdisc probe uses `ip link add <name> type dummy` in the global
+network namespace. This fails on GitHub Actions ubuntu-22.04 runners even as root
+([ENVIRONMENT] category). However, vxlan-tracer's actual TC operations are inside
+isolated network namespaces (`ip netns exec ns1 ip link add veth1 type veth`), which
+succeed. The preflight probe exposes a limitation of the runner, not a limitation
+of the tool. 5/5 scenarios pass despite this preflight FAIL.
+This reveals that the clsact probe should be WARN rather than FAIL for shared-runner environments.
+Evidence: evidence/day-10-x86-vm-scenarios.md (preflight section)
+
+### Finding 35: perf_event_paranoid=4 does not block kprobe attachment as root on 6.8.0-azure
+
+GitHub Actions runner has perf_event_paranoid=4 (typically most restrictive).
+Preflight reports WARN. Despite this, ip_do_fragment and icmp_rcv kprobes attach
+and fire correctly in all scenarios (as root via sudo). Root bypasses perf paranoia
+level for kprobe attachment.
+Evidence: evidence/day-10-x86-vm-scenarios.md
+
+### Finding 36: 5/5 scenarios pass on x86_64 6.8.0-1052-azure (first x86_64 test)
+
+GitHub Actions ubuntu-22.04 runner. Third kernel in validated matrix.
+All verdicts correct, all JSON fields identical to aarch64 results.
+CO-RE skb->len relocation confirmed architecture-independent.
+Evidence: evidence/day-10-x86-vm-scenarios.md
+
+## Updated hook confidence table (post-Day 10)
+
+| Hook | Verified how | Confidence |
+|------|-------------|------------|
+| ip_do_fragment symbol present | 3 kernels (6.10.14, 5.15.0, 6.8.0-azure) /proc/kallsyms | **CONFIRMED (3 kernels, 2 archs)** |
+| ip_do_fragment fires for DF=0 oversized outer | 5/5 scenario pass on all 3 kernels | **CONFIRMED (3 kernels, 2 archs)** |
+| ip_do_fragment kprobe via cilium/ebpf loader | scenario run on all 3 kernels | **CONFIRMED (3 kernels, 2 archs)** |
+| ip_do_fragment CO-RE skb->len resolves | frag_max_skb_len=1438 on all 3 kernels | **CONFIRMED (3 kernels, 2 archs)** |
+| PT_REGS_PARM1 aarch64 (regs[0]) | confirmed on 6.10.14 and 5.15.0 | **CONFIRMED** |
+| PT_REGS_PARM1 x86_64 (ctx->di) | confirmed on 6.8.0-1052-azure (Day 10) | **CONFIRMED** |
+| bpf_get_netns_cookie in kprobe: NOT available | "unknown func" on 5.15; "cannot use" on 6.10 | **CONFIRMED (aarch64 only; x86_64 not retested)** |
+| bpf_get_netns_cookie in sched_cls: NOT available | same errors on aarch64 | **CONFIRMED (aarch64)** |
+| skb->network_header at ip_do_fragment: inconsistent | inner IP seen on all 3 kernels | **CONFIRMED (3 kernels)** |
+| Two-signal corroboration: 5/5 pass | scenario runner on all 3 kernels | **CONFIRMED (3 kernels, 2 archs)** |
+| ip route flush cache: clears PMTU | second-run scenario pass on all 3 kernels | **CONFIRMED (3 kernels, 2 archs)** |
+| icmp_rcv IS a T symbol | all 3 kernels /proc/kallsyms | **CONFIRMED (3 kernels)** |
+| icmp_rcv fires AFTER netfilter INPUT | PTB scenarios on all 3 kernels | **CONFIRMED (3 kernels, 2 archs)** |
+| clsact qdisc inside netns | works on all 3 kernels (x86_64 runner restricts global netns) | **CONFIRMED** |
