@@ -63,51 +63,64 @@ kernel.
   - All verdict JSON fields identical to linuxkit results
 - **Evidence:** evidence/day-09-vm-preflight.md, evidence/day-09-vm-env.md, evidence/day-09-vm-scenarios.md, evidence/day-09-vm-helper-scope.md
 
-## Target matrix for Day 10+
+### Entry 3
 
-| Kernel | Architecture | Target | How to obtain |
+- **Kernel:** 6.8.0-1052-azure
+- **Distro:** Ubuntu 22.04.5 LTS
+- **Arch:** x86_64
+- **Environment:** GitHub Actions ubuntu-22.04 (Azure-hosted runner)
+- **Date:** 2026-06-18 (Day 10)
+- **Scenarios:** 5/5 pass
+- **Result:** ✅ PASS
+- **Notes:**
+  - BTF: /sys/kernel/btf/vmlinux present (6020051 bytes)
+  - bpffs: pre-mounted on GitHub-hosted runners
+  - Capabilities: sudo/root has CapEff=0x000001ffffffffff; ip link add dummy blocked at global netns (runner restriction), but TC ops inside netns succeed
+  - ip_do_fragment: T symbol, kprobeable; kprobe attaches and fires correctly
+  - icmp_rcv: T symbol, kprobeable; filters correctly to ICMP type=3/code=4
+  - BPF compile: required `-D__x86_64__` (stubs-32.h fix) — first run failed without it
+  - PT_REGS_PARM1 (x86 rdi): confirmed correct — frag_max_skb_len=1438 matches aarch64
+  - All five verdict JSON fields identical to aarch64 results
+  - ip route flush cache effective (scenario 5 idempotency passes)
+  - perf_event_paranoid=4 (WARN in preflight) did not prevent kprobe attachment as root
+- **Evidence:** evidence/day-10-x86-vm-scenarios.md, evidence/day-10-github-actions-run1.md, evidence/day-10-arch-comparison.md
+
+## Target matrix for remaining work
+
+| Kernel | Architecture | Status | How to obtain |
 |--------|-------------|--------|--------------|
-| 5.15.x LTS | x86_64 | High priority | GitHub Actions Ubuntu 22.04 runner, or AWS t3.small |
-| 6.8.x LTS | x86_64 | Medium | GitHub Actions Ubuntu 24.04 runner |
-| 6.8.x LTS | aarch64 | Medium | Lima VM with Ubuntu 24.04 arm64 |
-| 6.1.x LTS | x86_64 | Optional | Debian 12 VM |
+| 6.8.0-1052-azure | x86_64 | in progress | GitHub Actions ubuntu-22.04 runner |
+| 6.8.x LTS | x86_64 | future | GitHub Actions ubuntu-24.04 runner |
+| 6.8.x LTS | aarch64 | future | Lima VM with Ubuntu 24.04 arm64 |
+| 6.1.x LTS | x86_64 | future | Debian 12 VM |
+
+Note: ubuntu-22.04 runners provide kernel 6.8.0-1052-azure (Azure infrastructure
+kernel), not 5.15.x-generic as earlier assumed. This is still x86_64 with BTF.
 
 ### Why x86_64 still matters
 
-Both tested kernels are aarch64. The kprobe PT_REGS_PARM1 register convention
-differs between aarch64 and x86_64 — the `-D__TARGET_ARCH_*` flag selects the
-correct convention, but this has only been compiled, not verified against a real
-x86_64 kernel with a real binary load.
+Both previously confirmed kernels are aarch64. The kprobe PT_REGS_PARM1 register
+convention differs between aarch64 and x86_64 — the `-D__TARGET_ARCH_*` flag
+selects the correct convention, but the x86_64 path (`di` register) has only
+been compiled and not run-tested. Entry 3 is the first x86_64 run.
 
-Testing on x86_64 is the next priority to confirm that the `__TARGET_ARCH_x86`
-path resolves ip_do_fragment's first argument (skb) correctly.
-
-## Commands to run the scenario suite on a target VM
-
-Assuming the VM runs Ubuntu 22.04 and you have SSH access:
+## Commands to run the scenario suite
 
 ```bash
-# 1. Copy the pre-compiled binary (built with make build-linux-amd64 on your host)
-scp dist/vxlan-tracer-linux-amd64 user@vm:/tmp/vxlan-tracer-linux-amd64
-
-# 2. SSH into the VM and compile BPF objects there
-ssh user@vm
-sudo apt-get install -y clang llvm libbpf-dev linux-libc-dev iproute2 iputils-ping \
-    iptables python3 python3-scapy
-git clone <repo> /tmp/vxlan-tracer && cd /tmp/vxlan-tracer
-mkdir -p /tmp/bpfobjs
-clang -O2 -g -target bpf -I/usr/include -I/usr/include/x86_64-linux-gnu \
-    -D__TARGET_ARCH_x86 -c bpf/kprobes.bpf.c -o /tmp/bpfobjs/kprobes.bpf.o
-# ... compile all four BPF objects ...
-
-# 3. Run scenario suite
-sudo bash scripts/setup-bpf-fs.sh
-sudo BINARY=/tmp/vxlan-tracer-linux-amd64 BPF_DIR=/tmp/bpfobjs DURATION=15s \
-    bash scripts/run-scenarios.sh 2>&1 | tee /tmp/vm-scenarios-$(uname -r).log
-
-# 4. Capture kernel information for evidence
-uname -a >> /tmp/vm-scenarios-$(uname -r).log
+# On any Linux x86_64 Ubuntu 22.04 host:
+git clone https://github.com/mansoor-mamnoon/vxlan-tracer.git && cd vxlan-tracer
+sudo apt-get install -y clang llvm libbpf-dev linux-tools-generic \
+    iproute2 iputils-ping iptables python3 python3-pip make gcc build-essential gcc-multilib
+sudo pip3 install scapy
+# Install Go 1.21+ — see https://go.dev/dl/
+sudo make preflight       # verify 20+ checks pass
+sudo make bpf             # compile all 4 BPF objects
+make build                # build Go binary
+make test                 # 14 unit tests
+sudo BINARY=dist/vxlan-tracer BPF_DIR=bpf DURATION=15s bash scripts/run-scenarios.sh
 ```
+
+See `docs/x86-cloud-validation.md` for cloud VM step-by-step instructions.
 
 ## What constitutes a kernel matrix test result
 
@@ -119,13 +132,3 @@ A kernel matrix entry is only valid if:
 
 A container image label is NOT sufficient. `uname -a` from inside the test
 environment is the authoritative record of the kernel under test.
-
-## Current claim
-
-vxlan-tracer has been tested on:
-```
-Linux 6.10.14-linuxkit #1 SMP Thu Aug 14 19:26:13 UTC 2025 aarch64
-```
-
-No other kernel has been tested. Claims of compatibility with other kernels
-are untested and must not be made.
