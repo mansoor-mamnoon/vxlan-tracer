@@ -12,8 +12,12 @@ by routers or remote hosts in response to oversized outer packets with DF=1.
 This script generates a synthetic PTB locally so that the suppression test
 can be run without a real remote router.
 
-The injected ICMP embeds a plausible outer IP + outer UDP (port 4789) header
-in the ICMP payload, mimicking what a real router would send.
+The injected ICMP embeds a plausible outer IP + outer UDP header in the
+ICMP payload, mimicking what a real router would send.
+
+The VXLAN UDP destination port in the embedded header can be configured
+with --vxlan-port (default 4789).  Use --vxlan-port 8472 for older
+Flannel deployments that use the non-IANA default port.
 
 Usage:
     # From ns2, inject PTB toward ns1's underlay address
@@ -21,6 +25,15 @@ Usage:
         --src 192.168.100.2 \\
         --dst 192.168.100.1 \\
         --dev veth2 \\
+        --next-hop-mtu 1400 \\
+        --count 5
+
+    # Non-4789 VXLAN port (e.g. Flannel legacy port 8472):
+    ip netns exec ns2 python3 spikes/inject_ptb.py \\
+        --src 192.168.100.2 \\
+        --dst 192.168.100.1 \\
+        --dev veth2 \\
+        --vxlan-port 8472 \\
         --next-hop-mtu 1400 \\
         --count 5
 
@@ -42,7 +55,7 @@ ICMP PTB structure:
     [outer IP: src=192.168.100.2, dst=192.168.100.1, proto=ICMP]
     [ICMP type=3 code=4, next_hop_mtu=1400]
     [embedded original IP hdr: src=192.168.100.1, dst=192.168.100.2, proto=UDP]
-    [embedded original UDP hdr: src_port=<random>, dst_port=4789 (VXLAN)]
+    [embedded original UDP hdr: src_port=<random>, dst_port=--vxlan-port (default 4789)]
 """
 
 import argparse
@@ -65,6 +78,8 @@ def main():
                         help="Number of PTBs to inject (default: 1)")
     parser.add_argument("--interval", type=float, default=0.1,
                         help="Interval between packets in seconds (default: 0.1)")
+    parser.add_argument("--vxlan-port", type=int, default=4789,
+                        help="VXLAN UDP destination port embedded in the PTB payload (default: 4789; use 8472 for legacy Flannel)")
     args = parser.parse_args()
 
     try:
@@ -87,8 +102,7 @@ def main():
         len=1438,            # outer IP length that triggered PTB (inner 1388 + overhead 50)
         flags="DF",          # DF=1 set on outer IP
     )
-    # VXLAN uses destination UDP port 4789
-    original_udp = UDP(sport=12345, dport=4789)
+    original_udp = UDP(sport=12345, dport=args.vxlan_port)
 
     # Build the ICMP PTB.
     # Scapy ICMP type=3 layout (bytes after checksum):
@@ -114,7 +128,7 @@ def main():
     print(f"Injecting {args.count} synthetic ICMP PTB(s):")
     print(f"  src={args.src} → dst={args.dst}")
     print(f"  next_hop_mtu={args.next_hop_mtu}")
-    print(f"  embedded: {args.dst}→{args.src} UDP dport=4789 (outer IP len=1438 DF=1)")
+    print(f"  embedded: {args.dst}→{args.src} UDP dport={args.vxlan_port} (outer IP len=1438 DF=1)")
     print(f"  interface: {args.dev}")
     print()
 
