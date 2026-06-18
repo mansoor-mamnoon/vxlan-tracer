@@ -70,27 +70,49 @@ make scenarios
 | `make lab-down` | Remove namespaces and cleanup |
 | `make smoke-small` | Send a 40-byte inner ping (safe; should not fragment) |
 | `make smoke-large` | Send a 1360-byte inner ping (oversized; triggers fragmentation) |
-| `make scenarios` | Run `scripts/run-scenarios.sh` with Docker (all 4 scenarios) |
+| `make scenarios` | Run `scripts/run-scenarios.sh` with Docker (all 5 scenarios) |
 | `make cleanup-bpf` | Run `scripts/cleanup-bpf.sh` to remove TC filters and maps |
 
 ## Known kernel-dependent behavior
 
 ### Route MTU cache effect
 
-After repeated large-packet runs in the same lab, the Linux kernel may cache
-a reduced PMTU for the 192.168.100.x/24 route. On the next run, the kernel
-may send smaller outer packets (e.g., 1398 B instead of 1438 B). If
-`max_outer_ip_len` drops below the underlay MTU (1400), the two-signal
-fragmentation verdict path falls back to the conservative message:
-"ip_do_fragment is a global kernel function..."
+After large-packet runs in the same namespace, the Linux kernel caches a reduced
+PMTU. Observed on 6.10.14-linuxkit:
 
-To avoid this: run `scripts/cleanup-bpf.sh` AND delete the route MTU cache:
-```sh
-ip netns exec ns1 ip route flush cache
+```
+ip netns exec ns1 ip route show cache
+  10.244.0.2 dev vxlan0
+      cache expires 597sec mtu 1350
 ```
 
-Or use `scripts/run-scenarios.sh`, which always runs a fresh cleanup between
-scenarios, which recreates the network namespaces and resets the route cache.
+The kernel learned `mtu 1350` (correct: 1400 underlay - 50 VXLAN overhead).
+On subsequent runs without a cache flush, the kernel uses 1350B for inner
+packets → outer IP = 1400B (at the underlay MTU boundary, not over it) →
+`max_outer_ip_len` may be < underlay_mtu → conservative `global_unscoped`
+verdict instead of `global_corroborated`.
+
+**Proven workaround (6.10.14-linuxkit):** `ip route flush cache` clears the
+PMTU entry (exit 0, cache empty after flush). After flush, large pings
+retrigger full-size outer packets (1438B), restoring the corroborated verdict.
+
+```sh
+# Between runs in the same namespaces:
+bash scripts/cleanup-bpf.sh
+ip netns exec ns1 ip route flush cache
+ip netns exec ns2 ip route flush cache
+```
+
+**Full reset (any kernel):** tear down and recreate namespaces:
+```sh
+bash scripts/teardown-netns.sh
+bash scripts/setup-netns.sh
+```
+
+`scripts/run-scenarios.sh` recreates namespaces for scenarios 1-4 and uses
+`ip route flush cache` for scenario 5 (second-run idempotency test).
+
+The `ip route flush cache` behavior is documented in `evidence/day-08-route-cache.md`.
 
 ### skb->len value at ip_do_fragment entry
 
