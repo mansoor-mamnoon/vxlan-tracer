@@ -38,7 +38,9 @@ UNDERLAY_IP2="192.168.100.2"
 OVERLAY_IP1="10.244.0.1"
 OVERLAY_IP2="10.244.0.2"
 VNI=42
-VXLAN_PORT=4789
+# VXLAN_PORT can be set in the environment to override the default.
+# k3s/Flannel uses 8472; the IANA-assigned default is 4789.
+VXLAN_PORT=${VXLAN_PORT:-4789}
 INITIAL_UNDERLAY_MTU=1500   # underlay MTU during vxlan0 creation (kernel sets vxlan0=1450)
 REDUCED_UNDERLAY_MTU=1400   # reduced after creation; vxlan0 stays at 1450 (stale)
 WWW_DIR="/tmp/vxlan-lab-www"

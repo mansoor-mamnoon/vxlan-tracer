@@ -27,6 +27,9 @@ NETNS="${NETNS:-ns1}"
 OVERLAY="${OVERLAY:-vxlan0}"
 UNDERLAY="${UNDERLAY:-veth1}"
 DURATION="${DURATION:-15s}"
+# VXLAN_PORT is propagated from the environment; setup-netns.sh reads the same var.
+# inject_ptb.py embeds this port in the synthetic PTB payload so the BPF filter matches.
+VXLAN_PORT="${VXLAN_PORT:-4789}"
 
 PASS=0
 FAIL=0
@@ -174,7 +177,8 @@ _traffic_ptb_delivered() {
     ip netns exec "$NETNS" iptables -D INPUT -p icmp --icmp-type 3/4 -j DROP 2>/dev/null || true
     ip netns exec ns2 python3 spikes/inject_ptb.py \
         --src 192.168.100.2 --dst 192.168.100.1 \
-        --dev veth2 --next-hop-mtu 1400 --count 5
+        --dev veth2 --next-hop-mtu 1400 --count 5 \
+        --vxlan-port "$VXLAN_PORT"
 }
 
 _traffic_ptb_suppressed() {
@@ -182,7 +186,8 @@ _traffic_ptb_suppressed() {
     ip netns exec "$NETNS" iptables -A INPUT -p icmp --icmp-type 3/4 -j DROP
     ip netns exec ns2 python3 spikes/inject_ptb.py \
         --src 192.168.100.2 --dst 192.168.100.1 \
-        --dev veth2 --next-hop-mtu 1400 --count 5
+        --dev veth2 --next-hop-mtu 1400 --count 5 \
+        --vxlan-port "$VXLAN_PORT"
 }
 
 _run_second() {
