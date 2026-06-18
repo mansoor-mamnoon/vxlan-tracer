@@ -67,6 +67,16 @@ namespace environment. No production deployment required.
 - [x] skb->network_header inconsistency more severe on 5.15: inner IP even on first run (Day 9)
 - [x] ip route flush cache effective on 5.15.0-181-generic (Day 9)
 - [x] Two kernels in validated matrix: 6.10.14-linuxkit and 5.15.0-181-generic (Day 9)
+- [x] preflight.sh capability checks: CAP_BPF probe, netns probe, clsact qdisc probe,
+       unprivileged_bpf_disabled, perf_event_paranoid — failure categories: DEPENDENCY/PRIVILEGE/KERNEL/ENVIRONMENT (Day 10)
+- [x] GitHub Actions x86_64 CI probe: ubuntu-22.04 runner on x86_64 6.8.0-1052-azure (Day 10)
+- [x] x86_64 BPF compilation fix: -D__x86_64__ in Makefile CFLAGS for glibc stubs-32.h issue (Day 10)
+- [x] Real x86_64 validation: 6.8.0-1052-azure (GitHub Actions) — 5/5 PASS (Day 10)
+       NOTE: first x86_64 run; PT_REGS_PARM1 ctx->di confirmed; all JSON fields identical to aarch64
+- [x] Three kernels in validated matrix: 6.10.14-linuxkit, 5.15.0-181-generic, 6.8.0-1052-azure (Day 10)
+- [x] docs/x86-cloud-validation.md — cloud VM setup guide for x86_64 (Day 10)
+- [x] Makefile arch detection hardened: explicit FAIL for unsupported arch; bpf_target logged (Day 10)
+- [x] docs/kernel-matrix.md updated: real tested data only; entry 3 added for x86_64 (Day 10)
 
 ### V0 scope limitations
 
