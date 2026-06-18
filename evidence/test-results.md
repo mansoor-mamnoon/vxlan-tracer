@@ -756,3 +756,28 @@ Per-scenario:
 
 **Result:** PASS (5/5) — first confirmed x86_64 run; PT_REGS_PARM1 x86 convention works
 **Caveat:** Runner uses Azure kernel (6.8.0-1052-azure), not canonical Ubuntu 5.15.x. clsact qdisc probe in preflight fails at global netns level (runner restriction), but TC ops inside netns succeed. See evidence/day-10-x86-vm-scenarios.md.
+
+---
+
+## 2026-06-18 — Day 12: 6/6 scenario suite on Lima VM (5.15.0-181-generic) including port 8472
+
+**Environment:** Lima VM, Ubuntu 22.04.5 LTS, 5.15.0-181-generic aarch64, root
+**Command:** `sudo BINARY=dist/vxlan-tracer BPF_DIR=bpf DURATION=15s bash scripts/run-scenarios.sh`
+**Expected:** 6/6 pass — scenarios 1–5 unaffected by vxlan_config map addition; scenario 6 PTB_DELIVERED with vxlan_port=8472
+**Actual:**
+```
+Results: 6 passed, 0 failed
+```
+
+Per-scenario:
+- healthy_small          → VXLAN_MTU_MISCONFIGURATION   PASS  (vxlan_port=4789, vxlan_vni=42)
+- fragmentation          → VXLAN_FRAGMENTATION_OBSERVED  PASS  (frag_events_total=6, scope=global_corroborated)
+- ptb_delivered          → PTB_DELIVERED                 PASS  (ptb_ingress_total=5, icmp_rcv_total=5, vxlan_port=4789)
+- ptb_suppressed         → PTB_SUPPRESSED                PASS  (ptb_ingress_total=5, icmp_rcv_total=0, vxlan_port=4789)
+- fragmentation (2nd run)→ VXLAN_FRAGMENTATION_OBSERVED  PASS  (scope=global_corroborated)
+- ptb_delivered port=8472→ PTB_DELIVERED                 PASS  (ptb_ingress_total=5, icmp_rcv_total=5, vxlan_port=8472)
+
+Scenario 6 JSON: `"verdict":"PTB_DELIVERED","vxlan_port":8472,"vxlan_vni":42,"ptb_ingress_total":5,"icmp_rcv_total":5`
+
+**Result:** PASS (6/6)
+**Caveat:** 5.15.0-181-generic aarch64 only for scenario 6. Non-4789 scenario not run on x86_64 or 6.10.14-linuxkit. Netns lab only — not a real CNI node. See evidence/day-12-scenarios-8472.md.

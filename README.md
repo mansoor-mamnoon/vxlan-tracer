@@ -4,10 +4,11 @@ An eBPF-based diagnostic tool for VXLAN MTU blackholes.
 
 **Status: cross-architecture v0 prototype — validated on three Linux kernels across two
 architectures (6.10.14-linuxkit aarch64, Ubuntu 22.04 5.15.0-181-generic aarch64, and
-6.8.0-1052-azure x86_64). All five verdicts pass on all three kernels.
-VXLAN UDP port is runtime-configurable (--vxlan-port, default: auto-detect from interface).
-PT_REGS_PARM1 confirmed for both aarch64 and x86_64. ip_do_fragment scoping limitation
-documented. Not production-validated; CNI validation requires a real two-node cluster.**
+6.8.0-1052-azure x86_64). All six scenario variants pass on 5.15.0-181-generic including
+port-8472 (k3s/Flannel default). VXLAN UDP port is runtime-configurable (--vxlan-port,
+default: auto-detect via rtnetlink). PT_REGS_PARM1 confirmed for both aarch64 and x86_64.
+ip_do_fragment scoping limitation documented. Not production-validated; CNI validation
+requires a real two-node cluster.**
 
 ---
 
@@ -172,11 +173,11 @@ depending on kernel version and route MTU cache state).
 
 See `docs/fragmentation-scoping.md` for the five scoping options considered and why `bpf_get_netns_cookie`-based scoping is not feasible on this kernel.
 
-### What is proven (as of Day 10)
+### What is proven (as of Day 12)
 
 **Kernel and architecture coverage:**
 - 6.10.14-linuxkit aarch64 (Docker Desktop): 5/5 scenarios pass (Day 7–8)
-- 5.15.0-181-generic aarch64 (Ubuntu 22.04 Lima VM): 5/5 scenarios pass (Day 9)
+- 5.15.0-181-generic aarch64 (Ubuntu 22.04 Lima VM): 6/6 scenarios pass including port-8472 PTB_DELIVERED (Day 9, 12)
 - 6.8.0-1052-azure x86_64 (GitHub Actions ubuntu-22.04): 5/5 scenarios pass (Day 10)
 - All three kernels produce identical verdicts and JSON field values
 
@@ -226,18 +227,18 @@ of what constitutes a validated CNI entry.
   feasible on any tested kernel; see `docs/fragmentation-scoping.md`.
 - Production Kubernetes environments are not tested. Lab-only, two-namespace veth topology.
   See `docs/kubernetes-validation.md` for the two-node requirement.
-- VXLAN port auto-detect (rtnetlink) not run against a real VXLAN interface on Linux.
-  The code path compiles and the `vishvananda/netlink.Vxlan.Port` field is well-documented,
-  but an on-kernel run is required for full confidence.
+- VXLAN port auto-detect (rtnetlink) proven on 5.15.0-181-generic aarch64 with both 4789
+  and 8472 VXLAN interfaces. `DetectVXLAN` reads `IFLA_VXLAN_PORT` correctly via
+  `vishvananda/netlink.Vxlan.Port`. Not tested against a real CNI node (k3s/flannel.1).
 - Other kernel versions: 5.10.x, 6.1.x, 6.5.x not tested.
 - `bpf_get_netns_cookie` not retested on x86_64 (expected same UNSUPPORTED result).
 
-### Validated kernel matrix (as of Day 10)
+### Validated kernel matrix (as of Day 12)
 
 | Kernel | Distro | Arch | Environment | Scenarios |
 |--------|--------|------|-------------|-----------|
 | 6.10.14-linuxkit | Docker Desktop | aarch64 | Docker `--privileged` | 5/5 PASS |
-| 5.15.0-181-generic | Ubuntu 22.04.5 LTS | aarch64 | Lima VM (macOS VZ) | 5/5 PASS |
+| 5.15.0-181-generic | Ubuntu 22.04.5 LTS | aarch64 | Lima VM (macOS VZ) | 6/6 PASS (incl. port 8472) |
 | 6.8.0-1052-azure | Ubuntu 22.04.5 LTS | x86_64 | GitHub Actions | 5/5 PASS |
 
 ## Lab setup

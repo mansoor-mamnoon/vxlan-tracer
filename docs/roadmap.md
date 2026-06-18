@@ -80,11 +80,15 @@ namespace environment. No production deployment required.
 - [x] VXLAN UDP port runtime-configurable via BPF config map + --vxlan-port CLI flag (Day 11)
        NOTE: default changed from 4789 to 0 (auto-detect from overlay interface via rtnetlink)
 - [x] internal/netlink.DetectVXLAN: reads dstport and VNI from overlay interface via rtnetlink (Day 11)
-       NOTE: not run against a real VXLAN interface — needs Linux k3s node
+       NOTE: proven on 5.15.0-181-generic with both port-4789 and port-8472 netns interfaces (Day 12)
 - [x] vxlan_port and vxlan_vni JSON output fields (Day 11)
 - [x] inject_ptb.py --vxlan-port argument (default 4789) (Day 11)
 - [x] docs/kubernetes-validation.md: two-node requirement, proof checklist, CNI notes (Day 11)
 - [x] k8s/ manifests: namespace + traffic-pods with podAntiAffinity for cross-node enforcement (Day 11)
+- [x] Non-4789 port (8472) end-to-end: PTB_DELIVERED and PTB_SUPPRESSED proven in netns lab on 5.15.0-181-generic (Day 12)
+       NOTE: netns lab only — not a real k3s/flannel node
+- [x] 6/6 scenario suite proven: scenarios 1–5 unaffected by vxlan_config map; scenario 6 asserts vxlan_port=8472 in JSON (Day 12)
+- [x] k3s two-node validation: NOT RUN — no two-node cluster available from macOS dev env (Day 12)
 - [ ] Real two-node k3s/flannel validation: cross-node pod traffic on flannel.1 port 8472
 - [ ] CNI validation: PTB_DELIVERED or VXLAN_FRAGMENTATION_OBSERVED confirmed on real CNI traffic
 
