@@ -1,0 +1,131 @@
+# x86-smoke.yml — x86_64 capability probe for vxlan-tracer
+#
+# Purpose: probe whether GitHub-hosted ubuntu-22.04 runners (x86_64) can run
+# vxlan-tracer's BPF programs, kprobes, and network namespace scenarios.
+#
+# This is NOT guaranteed CI. GitHub-hosted runners share infrastructure and may
+# have kernel capability restrictions that prevent BPF load or netns setup.
+# The workflow is designed to capture exactly where it succeeds or fails, so
+# the result is evidence regardless of pass/fail.
+#
+# Architecture: ubuntu-22.04 runners are x86_64 (amd64).
+# This is the first x86_64 run of vxlan-tracer BPF programs.
+#
+# What this proves if it passes:
+#   - BPF compilation with __TARGET_ARCH_x86 flag works
+#   - BPF verifier accepts kprobe and TC programs on x86_64 kernel
+#   - CO-RE BTF resolution works on x86_64
+#   - All five scenario verdicts are correct on x86_64
+#
+# What it does NOT prove even if it passes:
+#   - Production Kubernetes environments
+#   - VXLAN-specific scoping of ip_do_fragment (still global)
+#   - Other x86_64 kernel versions (only 5.15.x tested here)
+
+name: x86_64 capability probe
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  x86-probe:
+    name: x86_64 BPF + scenario probe
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Capture kernel and architecture
+        run: |
+          echo "=== uname -a ==="
+          uname -a
+          echo "=== Architecture ==="
+          uname -m
+          echo "=== Distro ==="
+          cat /etc/os-release | grep -E 'PRETTY_NAME|VERSION_ID'
+          echo "=== BTF ==="
+          ls -lh /sys/kernel/btf/vmlinux 2>/dev/null || echo "BTF: NOT FOUND"
+          echo "=== bpffs ==="
+          mount | grep bpf || echo "bpffs: not mounted"
+          echo "=== capabilities (as runner) ==="
+          cat /proc/$$/status | grep CapEff || true
+          echo "=== capabilities (as root) ==="
+          sudo cat /proc/1/status | grep CapEff || true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            clang llvm libbpf-dev linux-tools-generic linux-tools-$(uname -r) \
+            iproute2 iputils-ping iptables python3 python3-pip \
+            make gcc build-essential
+          sudo pip3 install scapy --quiet
+          clang --version | head -1
+          go version
+
+      - name: Mount bpffs
+        run: |
+          sudo bash scripts/setup-bpf-fs.sh
+
+      - name: Run preflight check
+        run: |
+          sudo bash scripts/preflight.sh
+        continue-on-error: true
+
+      - name: Compile BPF objects (x86_64 with __TARGET_ARCH_x86)
+        run: |
+          sudo make bpf
+          echo "=== BPF objects ==="
+          ls -lh bpf/*.bpf.o
+
+      - name: Build Go binary (native x86_64)
+        run: |
+          make build
+          echo "=== Binary ==="
+          ls -lh dist/vxlan-tracer
+          file dist/vxlan-tracer
+
+      - name: Run Go unit tests
+        run: |
+          make test
+
+      - name: Attempt scenario suite
+        run: |
+          echo "=== Running 5-scenario suite on $(uname -r) x86_64 ==="
+          sudo BINARY=dist/vxlan-tracer BPF_DIR=bpf DURATION=15s \
+            bash scripts/run-scenarios.sh 2>&1 | tee /tmp/scenario-results.log
+          echo "=== Scenario runner exit code: $? ==="
+        continue-on-error: true
+
+      - name: Upload scenario logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-logs-x86_64
+          path: |
+            /tmp/scenario-*.log
+          if-no-files-found: ignore
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "=== Day 10 x86_64 probe summary ==="
+          echo "Kernel: $(uname -r)"
+          echo "Arch: $(uname -m)"
+          echo "Go: $(go version)"
+          echo "clang: $(clang --version 2>/dev/null | head -1)"
+          echo "BTF: $(ls /sys/kernel/btf/vmlinux 2>/dev/null && echo 'present' || echo 'absent')"
+          if [[ -f /tmp/scenario-results.log ]]; then
+            echo "=== Scenario results ==="
+            grep -E 'PASS|FAIL|Results:' /tmp/scenario-results.log || echo "(no scenario output)"
+          fi
