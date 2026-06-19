@@ -288,6 +288,33 @@ else
     _fail "PRIVILEGE" "ip netns list failed — iproute2 missing or insufficient privileges"
 fi
 
+# --- BPF object freshness (optional — skipped if objects not compiled yet) ---
+echo ""
+echo "-- BPF object freshness (vxlan_config map) --"
+_INGRESS_OBJ="${BPF_DIR:-bpf}/tc_ingress_eth0.bpf.o"
+if [[ -f "$_INGRESS_OBJ" ]]; then
+    _ingress_size=$(wc -c < "$_INGRESS_OBJ" 2>/dev/null || echo 0)
+    _info "$_INGRESS_OBJ exists ($_ingress_size bytes)"
+    # Check for the vxlan_config section in the ELF object.
+    # readelf (binutils), llvm-readelf, or objdump — use whichever is present.
+    _found_cfg=0
+    if readelf -S "$_INGRESS_OBJ" 2>/dev/null | grep -q vxlan_config; then
+        _found_cfg=1
+    elif llvm-readelf -S "$_INGRESS_OBJ" 2>/dev/null | grep -q vxlan_config; then
+        _found_cfg=1
+    elif objdump -h "$_INGRESS_OBJ" 2>/dev/null | grep -q vxlan_config; then
+        _found_cfg=1
+    fi
+    if [[ $_found_cfg -eq 1 ]]; then
+        _pass "$_INGRESS_OBJ contains vxlan_config map section (object is fresh)"
+    else
+        _fail "DEPENDENCY" "$_INGRESS_OBJ is missing the vxlan_config section — stale object"
+        _info "  Fix: make clean-bpf && make bpf"
+    fi
+else
+    _info "$_INGRESS_OBJ not found — BPF objects not compiled yet (run 'make bpf')"
+fi
+
 echo ""
 echo "==================================="
 echo "Preflight summary:"

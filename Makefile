@@ -49,9 +49,9 @@ CFLAGS_BPF_KPROBE := $(CFLAGS_BPF) $(_TARGET_ARCH_DEFINE)
 PREFIX ?= /usr/local
 
 .PHONY: all build build-linux-arm64 build-linux-amd64 package install uninstall \
-        bpf bpf-check generate lint vet test preflight \
+        bpf bpf-check bpf-verify generate lint vet test preflight \
         lab-up lab-down smoke-small smoke-large scenarios cleanup-bpf \
-        attach-bpf check-symbols clean help
+        attach-bpf check-symbols clean clean-bpf help
 
 all: build
 
@@ -246,6 +246,31 @@ check-symbols:
 clean:
 	rm -rf dist/ bpf/*.o
 
+# clean-bpf: remove compiled BPF objects only (leave Go dist/ intact).
+# Use before 'make bpf' to guarantee a fresh recompile — e.g. after pulling
+# changes to bpf/*.c or bpf/maps.h.  Without this, make may skip recompilation
+# if timestamps are equal (e.g. after 'cp -r' or 'git checkout').
+clean-bpf:
+	rm -f bpf/*.bpf.o
+	@echo "BPF objects removed.  Run 'make bpf' to recompile."
+
+# bpf-verify: check that the compiled tc_ingress object contains the
+# vxlan_config map section.  Fails loudly if the object was compiled before
+# the vxlan_config map was added (Day 11), so a stale object is caught before
+# running scenarios.  Requires readelf (binutils) or llvm-readelf.
+bpf-verify:
+	@OBJ=bpf/tc_ingress_eth0.bpf.o; \
+	if [[ ! -f "$$OBJ" ]]; then \
+	    echo "ERROR: $$OBJ not found — run 'make bpf' first"; exit 1; fi; \
+	if readelf -S "$$OBJ" 2>/dev/null | grep -q vxlan_config || \
+	   llvm-readelf -S "$$OBJ" 2>/dev/null | grep -q vxlan_config || \
+	   objdump -h "$$OBJ" 2>/dev/null | grep -q vxlan_config; then \
+	    echo "  PASS  $$OBJ contains vxlan_config map section"; \
+	else \
+	    echo "ERROR: $$OBJ is missing the vxlan_config map section."; \
+	    echo "       This is a stale BPF object compiled before the config map was added."; \
+	    echo "       Fix: make clean-bpf && make bpf"; exit 1; fi
+
 help:
 	@echo "Targets:"
 	@echo "  build                    Go binary (native platform, output: dist/vxlan-tracer)"
@@ -258,8 +283,10 @@ help:
 	@echo "  preflight                Check all runtime requirements (Linux + root)"
 	@echo "  vet                      go vet"
 	@echo "  bpf                      Compile BPF objects (Linux only)"
-	@echo "  bpf-check     Check BPF build prerequisites"
-	@echo "  attach-bpf    Attach BPF to lab interfaces (Linux, lab must be up)"
+	@echo "  bpf-check                Check BPF build prerequisites"
+	@echo "  bpf-verify               Verify compiled objects contain vxlan_config map"
+	@echo "  clean-bpf                Remove compiled BPF objects (use before make bpf to force rebuild)"
+	@echo "  attach-bpf               Attach BPF to lab interfaces (Linux, lab must be up)"
 	@echo "  lab-up        Create netns + VXLAN lab topology"
 	@echo "  lab-down      Tear down lab"
 	@echo "  smoke-small   Small traffic test"
