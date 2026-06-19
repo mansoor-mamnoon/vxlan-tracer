@@ -89,6 +89,18 @@ namespace environment. No production deployment required.
        NOTE: netns lab only — not a real k3s/flannel node
 - [x] 6/6 scenario suite proven: scenarios 1–5 unaffected by vxlan_config map; scenario 6 asserts vxlan_port=8472 in JSON (Day 12)
 - [x] k3s two-node validation: NOT RUN — no two-node cluster available from macOS dev env (Day 12)
+- [x] Stale BPF object guard: loader fails closed when vxlan_config map is missing (error + fix instructions) (Day 13)
+       NOTE: previously returned nil silently → attached with wrong port filter
+- [x] Unit tests for fail-closed loader: TestWriteVXLANPortToMapsMissing, TestWriteVXLANPortToMapsMissingPort0 (Day 13)
+- [x] make clean-bpf, make bpf-verify targets; bpf-verify uses readelf -s (symbol table, not section headers) (Day 13)
+- [x] Stale macOS BPF object deleted (17936 bytes, Jun 14, pre-vxlan_config) (Day 13)
+- [x] preflight.sh BPF object freshness check (same readelf -s approach) (Day 13)
+- [x] CI: clean-bpf + bpf-verify before compile; 6-scenario suite with port 8472 (Day 13)
+- [x] x86_64 6/6 pass on 6.8.0-1059-azure (GitHub Actions run 27851298262) including port 8472 (Day 13)
+       NOTE: job conclusion PASS; preflight ENVIRONMENT annotation from dummy interface restriction (expected)
+- [x] Four kernels in validated matrix: 6.10.14-linuxkit, 5.15.0-181-generic, 6.8.0-1052-azure, 6.8.0-1059-azure (Day 13)
+- [x] docs/release-checklist.md — pre-release gate items (Day 13)
+- [x] docs/forbidden-claims.md: added entry 15 distinguishing netns-lab from CNI validation (Day 13)
 - [ ] Real two-node k3s/flannel validation: cross-node pod traffic on flannel.1 port 8472
 - [ ] CNI validation: PTB_DELIVERED or VXLAN_FRAGMENTATION_OBSERVED confirmed on real CNI traffic
 

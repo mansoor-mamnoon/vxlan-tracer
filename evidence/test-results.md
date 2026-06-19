@@ -781,3 +781,83 @@ Scenario 6 JSON: `"verdict":"PTB_DELIVERED","vxlan_port":8472,"vxlan_vni":42,"pt
 
 **Result:** PASS (6/6)
 **Caveat:** 5.15.0-181-generic aarch64 only for scenario 6. Non-4789 scenario not run on x86_64 or 6.10.14-linuxkit. Netns lab only — not a real CNI node. See evidence/day-12-scenarios-8472.md.
+
+---
+
+## 2026-06-19 — Day 13: loader unit tests (fail-closed vxlan_config guard)
+
+**Environment:** Lima VM, Ubuntu 22.04.5 LTS, 5.15.0-181-generic aarch64 (local); also confirmed on x86_64 6.8.0-1059-azure (CI)
+**Command:** `go test ./internal/loader/ -v`
+**Expected:** TestWriteVXLANPortToMapsMissing and TestWriteVXLANPortToMapsMissingPort0 both PASS
+**Actual:**
+```
+=== RUN   TestWriteVXLANPortToMapsMissing
+--- PASS: TestWriteVXLANPortToMapsMissing (0.00s)
+=== RUN   TestWriteVXLANPortToMapsMissingPort0
+--- PASS: TestWriteVXLANPortToMapsMissingPort0 (0.00s)
+PASS  ok  github.com/mansoormmamnoon/vxlan-tracer/internal/loader  0.002s  (local)
+PASS  ok  github.com/mansoormmamnoon/vxlan-tracer/internal/loader  0.003s  (CI x86_64)
+```
+**Result:** PASS (both tests on both architectures)
+**Caveat:** Tests verify error path using an empty `map[string]*ebpf.Map{}`. They do not load
+a real BPF object — they only confirm that the loader returns a non-nil error with the expected
+message when the map is absent. See evidence/day-13-stale-bpf-guard.md.
+
+---
+
+## 2026-06-19 — Day 13: make bpf-verify on fresh 19K object
+
+**Environment:** Lima VM, Ubuntu 22.04.5 LTS, 5.15.0-181-generic aarch64
+**Command:** `make bpf-verify`
+**Expected:** PASS — vxlan_config symbol found in ELF symbol table
+**Actual:**
+```
+  PASS  bpf/tc_ingress_eth0.bpf.o contains vxlan_config map section
+```
+**Result:** PASS
+**Caveat:** Initial implementation used `readelf -S` (section headers) — wrong; vxlan_config is a
+symbol within the .maps section, not a section header entry. Fixed to `readelf -s` (symbol table).
+
+---
+
+## 2026-06-19 — Day 13: 6/6 scenario suite after fail-closed loader (Lima VM)
+
+**Environment:** Lima VM, Ubuntu 22.04.5 LTS, 5.15.0-181-generic aarch64, root
+**Command:** `sudo BINARY=dist/vxlan-tracer BPF_DIR=bpf DURATION=15s bash scripts/run-scenarios.sh`
+**Expected:** 6/6 pass with fail-closed loader in place (fresh 19K object)
+**Actual:**
+```
+Results: 6 passed, 0 failed
+```
+- healthy_small          → VXLAN_MTU_MISCONFIGURATION   PASS
+- fragmentation          → VXLAN_FRAGMENTATION_OBSERVED  PASS (scope=global_corroborated)
+- ptb_delivered          → PTB_DELIVERED                 PASS (vxlan_port=4789)
+- ptb_suppressed         → PTB_SUPPRESSED                PASS (vxlan_port=4789)
+- fragmentation (2nd)    → VXLAN_FRAGMENTATION_OBSERVED  PASS (scope=global_corroborated)
+- ptb_delivered port=8472→ PTB_DELIVERED                 PASS (vxlan_port=8472, vxlan_vni=42)
+
+**Result:** PASS (6/6)
+**Caveat:** See evidence/day-13-local-6-scenarios.md.
+
+---
+
+## 2026-06-19 — Day 13: 6/6 scenario suite on x86_64 6.8.0-1059-azure (GitHub Actions run 27851298262)
+
+**Environment:** GitHub Actions ubuntu-22.04, kernel 6.8.0-1059-azure x86_64, root
+**Command:** `sudo BINARY=dist/vxlan-tracer BPF_DIR=bpf DURATION=15s bash scripts/run-scenarios.sh`
+**Run:** 27851298262, job conclusion: PASS
+**Expected:** 6/6 pass on x86_64 including port 8472
+**Actual:**
+```
+Results: 6 passed, 0 failed
+All 6 binary exits: 0
+```
+- Scenarios 1–5: identical to prior x86_64 5/5 result (6.8.0-1052-azure)
+- Scenario 6: `{"verdict":"PTB_DELIVERED","vxlan_port":8472,"ptb_ingress_total":5,"icmp_rcv_total":5}`
+
+bpf-verify: `PASS  bpf/tc_ingress_eth0.bpf.o contains vxlan_config map section`
+Loader unit tests: `ok  github.com/mansoormmamnoon/vxlan-tracer/internal/loader  0.003s`
+
+**Result:** PASS (6/6) — first x86_64 run including port 8472
+**Caveat:** Preflight ENVIRONMENT failure (ip link add dummy blocked); step has `continue-on-error: true`;
+job conclusion was PASS. Netns lab only. See evidence/day-13-x86-8472-result.md.

@@ -85,17 +85,34 @@ kernel.
   - perf_event_paranoid=4 (WARN in preflight) did not prevent kprobe attachment as root
 - **Evidence:** evidence/day-10-x86-vm-scenarios.md, evidence/day-10-github-actions-run1.md, evidence/day-10-arch-comparison.md
 
+### Entry 4
+
+- **Kernel:** 6.8.0-1059-azure
+- **Distro:** Ubuntu 22.04.5 LTS (GitHub Actions)
+- **Arch:** x86_64
+- **Environment:** GitHub Actions ubuntu-22.04 (Azure-hosted runner)
+- **Date:** 2026-06-19 (Day 13)
+- **Scenarios:** 6/6 pass (including port 8472)
+- **Result:** ✅ PASS
+- **Notes:**
+  - BPF compile: `make clean-bpf` + `make bpf` with `__TARGET_ARCH_x86`; `bpf-verify` PASS
+  - Scenario 6 (port 8472): `"vxlan_port":8472,"ptb_ingress_total":5,"icmp_rcv_total":5`
+  - Loader unit tests `TestWriteVXLANPortToMapsMissing` + `TestWriteVXLANPortToMapsMissingPort0`: 0.003s PASS
+  - Preflight: 23 PASS, 1 FAIL (ENVIRONMENT: `ip link add dummy` blocked); `continue-on-error: true`; job conclusion PASS
+  - BTF: `/sys/kernel/btf/vmlinux` present (6023934 bytes)
+  - All 6 binary exits: code 0
+- **Evidence:** evidence/day-13-x86-8472-result.md, evidence/day-13-local-6-scenarios.md
+
 ## Target matrix for remaining work
 
 | Kernel | Architecture | Status | How to obtain |
 |--------|-------------|--------|--------------|
-| 6.8.0-1052-azure | x86_64 | in progress | GitHub Actions ubuntu-22.04 runner |
 | 6.8.x LTS | x86_64 | future | GitHub Actions ubuntu-24.04 runner |
 | 6.8.x LTS | aarch64 | future | Lima VM with Ubuntu 24.04 arm64 |
 | 6.1.x LTS | x86_64 | future | Debian 12 VM |
 
-Note: ubuntu-22.04 runners provide kernel 6.8.0-1052-azure (Azure infrastructure
-kernel), not 5.15.x-generic as earlier assumed. This is still x86_64 with BTF.
+Note: ubuntu-22.04 runners provide kernel 6.8.0-1059-azure (Azure infrastructure
+kernel). x86_64 is now validated at 6/6 including port 8472 (Day 13).
 
 ### Why x86_64 still matters
 
