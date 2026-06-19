@@ -1,28 +1,29 @@
-# x86-smoke.yml — x86_64 capability probe for vxlan-tracer
+# x86-smoke.yml — x86_64 scenario probe for vxlan-tracer
 #
-# Purpose: probe whether GitHub-hosted ubuntu-22.04 runners (x86_64) can run
-# vxlan-tracer's BPF programs, kprobes, and network namespace scenarios.
+# Purpose: run vxlan-tracer's 6-scenario suite on GitHub-hosted ubuntu-22.04
+# x86_64 runners, including the port-8472 (k3s/Flannel default) scenario.
 #
 # This is NOT guaranteed CI. GitHub-hosted runners share infrastructure and may
-# have kernel capability restrictions that prevent BPF load or netns setup.
-# The workflow is designed to capture exactly where it succeeds or fails, so
-# the result is evidence regardless of pass/fail.
+# have kernel capability restrictions. The workflow captures where it succeeds or
+# fails so the result is evidence regardless of pass/fail.
 #
 # Architecture: ubuntu-22.04 runners are x86_64 (amd64).
-# This is the first x86_64 run of vxlan-tracer BPF programs.
 #
-# What this proves if it passes:
+# What this proves if all 6 scenarios pass:
 #   - BPF compilation with __TARGET_ARCH_x86 flag works
 #   - BPF verifier accepts kprobe and TC programs on x86_64 kernel
 #   - CO-RE BTF resolution works on x86_64
-#   - All five scenario verdicts are correct on x86_64
+#   - All six scenario verdicts are correct on x86_64, including port-8472
+#   - vxlan_config map write (portNBO=bpf_htons(8472)) works on x86_64
+#   - vxlan_port=8472 appears correctly in JSON output on x86_64
 #
 # What it does NOT prove even if it passes:
 #   - Production Kubernetes environments
 #   - VXLAN-specific scoping of ip_do_fragment (still global)
-#   - Other x86_64 kernel versions (only 5.15.x tested here)
+#   - Other x86_64 kernel versions (only the azure kernel tested here)
+#   - Real CNI (k3s/flannel) validation — requires a two-node cluster
 
-name: x86_64 capability probe
+name: x86_64 scenario probe (6-scenario + port 8472)
 
 on:
   push:
@@ -84,9 +85,12 @@ jobs:
 
       - name: Compile BPF objects (x86_64 with __TARGET_ARCH_x86)
         run: |
+          sudo make clean-bpf
           sudo make bpf
           echo "=== BPF objects ==="
           ls -lh bpf/*.bpf.o
+          echo "=== BPF verify (vxlan_config present) ==="
+          make bpf-verify
 
       - name: Build Go binary (native x86_64)
         run: |
@@ -99,9 +103,9 @@ jobs:
         run: |
           make test
 
-      - name: Attempt scenario suite
+      - name: Run 6-scenario suite (includes port 8472)
         run: |
-          echo "=== Running 5-scenario suite on $(uname -r) x86_64 ==="
+          echo "=== Running 6-scenario suite on $(uname -r) x86_64 ==="
           sudo BINARY=dist/vxlan-tracer BPF_DIR=bpf DURATION=15s \
             bash scripts/run-scenarios.sh 2>&1 | tee /tmp/scenario-results.log
           echo "=== Scenario runner exit code: $? ==="
@@ -114,18 +118,21 @@ jobs:
           name: scenario-logs-x86_64
           path: |
             /tmp/scenario-*.log
+            /tmp/vxlan-lab-http.log
           if-no-files-found: ignore
+          retention-days: 7
 
       - name: Summary
         if: always()
         run: |
-          echo "=== Day 10 x86_64 probe summary ==="
+          echo "=== Day 13 x86_64 6-scenario probe summary ==="
           echo "Kernel: $(uname -r)"
           echo "Arch: $(uname -m)"
           echo "Go: $(go version)"
           echo "clang: $(clang --version 2>/dev/null | head -1)"
           echo "BTF: $(ls /sys/kernel/btf/vmlinux 2>/dev/null && echo 'present' || echo 'absent')"
+          echo "tc_ingress size: $(wc -c < bpf/tc_ingress_eth0.bpf.o 2>/dev/null || echo 'not found') bytes"
           if [[ -f /tmp/scenario-results.log ]]; then
             echo "=== Scenario results ==="
-            grep -E 'PASS|FAIL|Results:' /tmp/scenario-results.log || echo "(no scenario output)"
+            grep -E '\[PASS\]|\[FAIL\]|Results:|vxlan_port' /tmp/scenario-results.log || echo "(no scenario output)"
           fi
