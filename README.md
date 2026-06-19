@@ -2,13 +2,13 @@
 
 An eBPF-based diagnostic tool for VXLAN MTU blackholes.
 
-**Status: cross-architecture v0 prototype — validated on three Linux kernels across two
-architectures (6.10.14-linuxkit aarch64, Ubuntu 22.04 5.15.0-181-generic aarch64, and
-6.8.0-1052-azure x86_64). All six scenario variants pass on 5.15.0-181-generic including
-port-8472 (k3s/Flannel default). VXLAN UDP port is runtime-configurable (--vxlan-port,
-default: auto-detect via rtnetlink). PT_REGS_PARM1 confirmed for both aarch64 and x86_64.
-ip_do_fragment scoping limitation documented. Not production-validated; CNI validation
-requires a real two-node cluster.**
+**Status: cross-architecture v0 prototype — validated in netns lab on four Linux kernels
+across two architectures. All six scenario variants pass on both aarch64 (5.15.0-181-generic)
+and x86_64 (6.8.0-1059-azure), including port-8472 (k3s/Flannel default). VXLAN UDP port
+is runtime-configurable (--vxlan-port, default: auto-detect via rtnetlink); ports 4789 and
+8472 validated in netns lab. PT_REGS_PARM1 confirmed for both architectures. ip_do_fragment
+scoping limitation documented. k3s/flannel CNI validation requires a real two-node cluster
+and is not yet complete.**
 
 ---
 
@@ -167,18 +167,43 @@ The following outputs were captured from a running Docker container
 ip_do_fragment entry is kernel-dependent (may be the outer or inner IP length
 depending on kernel version and route MTU cache state).
 
+### PTB_DELIVERED — port 8472 (k3s/Flannel default)
+
+```json
+{
+  "verdict": "PTB_DELIVERED",
+  "message": "5 ICMP type=3/code=4 packet(s) were observed at TC ingress and 5 reached icmp_rcv: PTBs are reaching the kernel's ICMP handling path, not being suppressed.",
+  "overlay": "vxlan0",
+  "underlay": "veth1",
+  "vxlan_port": 8472,
+  "vxlan_vni": 42,
+  "overlay_mtu": 1450,
+  "underlay_mtu": 1400,
+  "recommended_overlay_mtu": 1350,
+  "ptb_ingress_total": 5,
+  "icmp_rcv_total": 5,
+  "frag_events_total": 0,
+  "max_outer_ip_len": 0
+}
+```
+
+Captured from a netns lab with `vxlan0` created as `ip link add vxlan0 type vxlan dstport 8472`.
+Not captured from a real k3s/flannel node; `ip -d link` on a real cluster is the authoritative
+source of the port in use.
+
 `fragmentation_scope` is present only for fragmentation verdicts:
 - `global_corroborated`: both ip_do_fragment fired AND TC egress saw outer packets over the underlay MTU — the two signals agree.
 - `global_unscoped`: ip_do_fragment fired but TC egress did not corroborate an oversized VXLAN outer packet. The counter may include non-VXLAN fragmentation.
 
 See `docs/fragmentation-scoping.md` for the five scoping options considered and why `bpf_get_netns_cookie`-based scoping is not feasible on this kernel.
 
-### What is proven (as of Day 12)
+### What is proven (as of Day 13)
 
 **Kernel and architecture coverage:**
 - 6.10.14-linuxkit aarch64 (Docker Desktop): 5/5 scenarios pass (Day 7–8)
-- 5.15.0-181-generic aarch64 (Ubuntu 22.04 Lima VM): 6/6 scenarios pass including port-8472 PTB_DELIVERED (Day 9, 12)
+- 5.15.0-181-generic aarch64 (Ubuntu 22.04 Lima VM): 6/6 scenarios pass including port-8472 (Day 9, 12–13)
 - 6.8.0-1052-azure x86_64 (GitHub Actions ubuntu-22.04): 5/5 scenarios pass (Day 10)
+- 6.8.0-1059-azure x86_64 (GitHub Actions ubuntu-22.04): 6/6 scenarios pass including port-8472 (Day 13)
 - All three kernels produce identical verdicts and JSON field values
 
 **BPF / kprobe / CO-RE:**
@@ -204,7 +229,7 @@ See `docs/fragmentation-scoping.md` for the five scoping options considered and 
 - Binary reruns in the same container/VM are idempotent after route cache flush
 - Exit code 0 = verdict produced; exit code 2 = tool/runtime error
 
-### CNI compatibility matrix (as of Day 11)
+### CNI port reference (documentation-based; no two-node cluster tested)
 
 | CNI | VXLAN port | Auto-detect | Notes |
 |-----|-----------|-------------|-------|
@@ -233,13 +258,16 @@ of what constitutes a validated CNI entry.
 - Other kernel versions: 5.10.x, 6.1.x, 6.5.x not tested.
 - `bpf_get_netns_cookie` not retested on x86_64 (expected same UNSUPPORTED result).
 
-### Validated kernel matrix (as of Day 12)
+### Validated kernel matrix (as of Day 13)
 
 | Kernel | Distro | Arch | Environment | Scenarios |
 |--------|--------|------|-------------|-----------|
 | 6.10.14-linuxkit | Docker Desktop | aarch64 | Docker `--privileged` | 5/5 PASS |
 | 5.15.0-181-generic | Ubuntu 22.04.5 LTS | aarch64 | Lima VM (macOS VZ) | 6/6 PASS (incl. port 8472) |
 | 6.8.0-1052-azure | Ubuntu 22.04.5 LTS | x86_64 | GitHub Actions | 5/5 PASS |
+| 6.8.0-1059-azure | Ubuntu 22.04.5 LTS | x86_64 | GitHub Actions | 6/6 PASS (incl. port 8472) |
+
+All results from netns lab (single-host veth topology). No two-node CNI cluster tested.
 
 ## Lab setup
 
