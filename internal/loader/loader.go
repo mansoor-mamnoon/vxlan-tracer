@@ -141,22 +141,30 @@ type vxlanCfgVal struct {
 	Pad        uint16
 }
 
-// writeVXLANConfig writes the configured VXLAN UDP destination port into the
-// vxlan_config ARRAY map in coll.  The port is converted from host byte order
-// to network byte order before writing.  If portHost is 0 the default 4789 is
-// used.  If the map is absent (object compiled without it) the call is a no-op.
+// writeVXLANConfig writes the VXLAN UDP destination port into the vxlan_config
+// ARRAY map in coll.  Fails hard if the map is absent — a missing map means the
+// tc_ingress BPF object is stale (compiled before Day 11 added the map).  Stale
+// objects silently fall back to port 4789 regardless of --vxlan-port, which would
+// make the 8472 scenario pass for the wrong reason.
 func writeVXLANConfig(coll *ebpf.Collection, portHost uint16) error {
-	m, ok := coll.Maps["vxlan_config"]
+	return writeVXLANPortToMaps(coll.Maps, portHost)
+}
+
+// writeVXLANPortToMaps is the testable core of writeVXLANConfig.
+// It accepts the collection's Maps field directly so tests can supply an
+// empty or partial map[string]*ebpf.Map without loading a real BPF object.
+func writeVXLANPortToMaps(maps map[string]*ebpf.Map, portHost uint16) error {
+	m, ok := maps["vxlan_config"]
 	if !ok {
-		return nil
+		return fmt.Errorf("vxlan_config map missing from tc_ingress object — " +
+			"likely stale BPF object; run: make clean-bpf && make bpf")
 	}
 	if portHost == 0 {
 		portHost = 4789
 	}
 	// Swap bytes: host-byte-order uint16 → network byte order uint16.
-	// The cilium/ebpf library encodes structs in native (LE) byte order.
-	// Storing portNBO = bpf_htons(portHost) makes the encoded bytes match
-	// NBO, which is what udph->dest carries in the packet.
+	// cilium/ebpf encodes structs in native (LE) byte order; storing portNBO
+	// makes the encoded bytes match NBO, matching udph->dest in the packet.
 	portNBO := (portHost >> 8) | (portHost << 8)
 	key := uint32(0)
 	val := vxlanCfgVal{VXLANDPort: portNBO}
