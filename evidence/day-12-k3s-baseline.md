@@ -47,7 +47,7 @@ kubectl debug node/<node1> -it --image=ubuntu -- bash
 ## Expected baseline output
 
 On a healthy k3s cluster with correct MTU:
-- `verdict: VXLAN_HEALTHY` or no MTU issue detected
+- `verdict: NO_ISSUE_OBSERVED` or no MTU issue detected
 - `vxlan_port: 8472` (flannel default)
 - `ptb_ingress_total: 0`, `icmp_rcv_total: 0`, `frag_events_total: 0`
 

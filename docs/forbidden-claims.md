@@ -173,7 +173,32 @@ Documented in `docs/kernel-matrix.md`.
 
 ---
 
-## 15. "Idempotent across all kernel versions"
+## 15. "k3s/flannel validated" or "CNI validated" without a two-node cluster
+
+**Why forbidden:** Port-8472 scenarios in the evidence (`day-12-scenarios-8472.md`,
+`day-13-local-6-scenarios.md`) were run in a netns-lab: a `vxlan0` device
+created with `ip link add ... type vxlan dstport 8472` inside network namespaces
+on a single Linux host. This is NOT a CNI environment.
+
+k3s/flannel creates VXLAN interfaces via its own CNI plugin (`flannel.1`),
+configures them with its own MTU policy, and routes traffic between real pods on
+different nodes. The netns lab proves that the port-8472 BPF filter and byte-order
+conversion work correctly. It does not prove that vxlan-tracer attaches correctly
+to a real CNI overlay, nor that verdicts are accurate under real pod traffic.
+
+CNI validation requires all items in `docs/kubernetes-validation.md`:
+a two-node cluster, live pod-to-pod cross-node traffic, and `ip -d link` proof
+of the overlay device.
+
+Forbidden phrases:
+- "k3s validated" or "flannel validated"
+- "port 8472 validated on Kubernetes"
+- "tested with CNI" (without the two-node checklist complete)
+- "production CNI validated"
+
+---
+
+## 15b. "Idempotent across all kernel versions"
 
 **Why forbidden:** The idempotent TC attach (`FilterList+FilterDel`) and map
 clearing (`ClearPinned`) have been tested only on kernel 6.10.14-linuxkit.

@@ -1,6 +1,6 @@
 # Day 12 — Full 6-scenario suite with 8472 port scenario
 
-**Date:** 2026-06-13
+**Date:** 2026-06-18
 **Kernel:** 5.15.0-181-generic aarch64
 **Environment:** Lima VM (Ubuntu 22.04.5 LTS)
 
