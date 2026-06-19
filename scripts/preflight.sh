@@ -295,14 +295,15 @@ _INGRESS_OBJ="${BPF_DIR:-bpf}/tc_ingress_eth0.bpf.o"
 if [[ -f "$_INGRESS_OBJ" ]]; then
     _ingress_size=$(wc -c < "$_INGRESS_OBJ" 2>/dev/null || echo 0)
     _info "$_INGRESS_OBJ exists ($_ingress_size bytes)"
-    # Check for the vxlan_config section in the ELF object.
-    # readelf (binutils), llvm-readelf, or objdump — use whichever is present.
+    # Check for the vxlan_config symbol in the ELF object.
+    # vxlan_config is a symbol in the .maps section (not a section itself).
+    # Use readelf -s (symbol table, lowercase -s) or nm.
     _found_cfg=0
-    if readelf -S "$_INGRESS_OBJ" 2>/dev/null | grep -q vxlan_config; then
+    if readelf -s "$_INGRESS_OBJ" 2>/dev/null | grep -q vxlan_config; then
         _found_cfg=1
-    elif llvm-readelf -S "$_INGRESS_OBJ" 2>/dev/null | grep -q vxlan_config; then
+    elif nm "$_INGRESS_OBJ" 2>/dev/null | grep -q vxlan_config; then
         _found_cfg=1
-    elif objdump -h "$_INGRESS_OBJ" 2>/dev/null | grep -q vxlan_config; then
+    elif strings "$_INGRESS_OBJ" 2>/dev/null | grep -qx vxlan_config; then
         _found_cfg=1
     fi
     if [[ $_found_cfg -eq 1 ]]; then

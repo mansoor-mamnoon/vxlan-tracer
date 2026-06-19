@@ -258,13 +258,16 @@ clean-bpf:
 # vxlan_config map section.  Fails loudly if the object was compiled before
 # the vxlan_config map was added (Day 11), so a stale object is caught before
 # running scenarios.  Requires readelf (binutils) or llvm-readelf.
+# Uses /bin/bash explicitly to allow process-substitution-free grep chains.
 bpf-verify:
 	@OBJ=bpf/tc_ingress_eth0.bpf.o; \
-	if [[ ! -f "$$OBJ" ]]; then \
+	if [ ! -f "$$OBJ" ]; then \
 	    echo "ERROR: $$OBJ not found — run 'make bpf' first"; exit 1; fi; \
-	if readelf -S "$$OBJ" 2>/dev/null | grep -q vxlan_config || \
-	   llvm-readelf -S "$$OBJ" 2>/dev/null | grep -q vxlan_config || \
-	   objdump -h "$$OBJ" 2>/dev/null | grep -q vxlan_config; then \
+	_found=0; \
+	readelf -s "$$OBJ" 2>/dev/null | grep -q vxlan_config && _found=1; \
+	[ "$$_found" -eq 0 ] && nm "$$OBJ" 2>/dev/null | grep -q vxlan_config && _found=1; \
+	[ "$$_found" -eq 0 ] && strings "$$OBJ" 2>/dev/null | grep -qx vxlan_config && _found=1; \
+	if [ "$$_found" -eq 1 ]; then \
 	    echo "  PASS  $$OBJ contains vxlan_config map section"; \
 	else \
 	    echo "ERROR: $$OBJ is missing the vxlan_config map section."; \
