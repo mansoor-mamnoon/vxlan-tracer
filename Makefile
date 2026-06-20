@@ -68,7 +68,7 @@ _BPF_ARCH_DEFINE := $(shell if [ "$(PACKAGE_ARCH)" = "arm64" ]; then echo __TARG
 # Required BPF objects for a complete release archive. Hard-checked by make package.
 _BPF_REQUIRED := tc_ingress_eth0.bpf.o tc_egress_vxlan0.bpf.o kprobes.bpf.o frag_kprobes.bpf.o
 
-.PHONY: all build build-linux-arm64 build-linux-amd64 package install uninstall \
+.PHONY: all build build-linux-arm64 build-linux-amd64 package package-rc1 install uninstall \
         bpf bpf-check bpf-verify generate lint vet test test-stale-bpf preflight \
         lab-up lab-down smoke-small smoke-large demo scenarios cleanup-bpf \
         attach-bpf check-symbols clean clean-bpf help verify-release-archive
@@ -231,6 +231,12 @@ package:
 ARCHIVE ?= dist/release/vxlan-tracer-linux-$(PACKAGE_ARCH).tar.gz
 verify-release-archive:
 	@bash scripts/verify-release-archive.sh "$(ARCHIVE)"
+
+# package-rc1: build the v0.1.0-rc1 release archive for this architecture.
+# Equivalent to: VERSION=v0.1.0-rc1 make package
+# Requires Linux + compiled BPF objects (make bpf).
+package-rc1:
+	@$(MAKE) package VERSION=v0.1.0-rc1
 
 test:
 	go test ./...
