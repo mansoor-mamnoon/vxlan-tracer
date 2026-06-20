@@ -88,7 +88,8 @@ done
 
 echo ""
 echo "-- Required scripts --"
-for s in preflight.sh run-scenarios.sh demo.sh setup-bpf-fs.sh; do
+for s in preflight.sh run-scenarios.sh demo.sh setup-bpf-fs.sh \
+          setup-netns.sh teardown-netns.sh cleanup-bpf.sh inject_ptb.py; do
     if [[ -f "$PKG/scripts/$s" ]]; then
         _pass "scripts/$s"
     else

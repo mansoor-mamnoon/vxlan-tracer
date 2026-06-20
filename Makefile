@@ -161,7 +161,8 @@ package:
 	done; \
 	for s in scripts/preflight.sh scripts/run-scenarios.sh scripts/demo.sh \
 	          scripts/setup-bpf-fs.sh scripts/setup-netns.sh \
-	          scripts/teardown-netns.sh; do \
+	          scripts/teardown-netns.sh scripts/cleanup-bpf.sh \
+	          scripts/inject_ptb.py; do \
 	    [ -f "$$s" ] && cp "$$s" "$$STAGEDIR/scripts/" || true; \
 	done; \
 	[ -f README.md ] && cp README.md "$$STAGEDIR/"; \

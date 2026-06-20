@@ -175,7 +175,7 @@ _traffic_fragmentation() {
 _traffic_ptb_delivered() {
     # Remove any iptables DROP rule; inject 5 synthetic PTBs
     ip netns exec "$NETNS" iptables -D INPUT -p icmp --icmp-type 3/4 -j DROP 2>/dev/null || true
-    ip netns exec ns2 python3 spikes/inject_ptb.py \
+    ip netns exec ns2 python3 "$(dirname "$0")/inject_ptb.py" \
         --src 192.168.100.2 --dst 192.168.100.1 \
         --dev veth2 --next-hop-mtu 1400 --count 5 \
         --vxlan-port "$VXLAN_PORT"
@@ -184,7 +184,7 @@ _traffic_ptb_delivered() {
 _traffic_ptb_suppressed() {
     # Install iptables DROP rule before injecting
     ip netns exec "$NETNS" iptables -A INPUT -p icmp --icmp-type 3/4 -j DROP
-    ip netns exec ns2 python3 spikes/inject_ptb.py \
+    ip netns exec ns2 python3 "$(dirname "$0")/inject_ptb.py" \
         --src 192.168.100.2 --dst 192.168.100.1 \
         --dev veth2 --next-hop-mtu 1400 --count 5 \
         --vxlan-port "$VXLAN_PORT"
