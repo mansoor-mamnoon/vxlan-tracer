@@ -74,16 +74,54 @@ build-linux-amd64: generate
 	GOOS=linux GOARCH=amd64 go build -o dist/$(BINARY)-linux-amd64 ./cmd/vxlan-tracer/
 	@echo "  built: dist/$(BINARY)-linux-amd64"
 
-# package: build all Linux targets and create a release tarball under dist/
-# BPF objects must be compiled separately on Linux (see make bpf).
+# package: build both Linux targets and produce per-arch tarballs under dist/release/.
+#
+# Archives produced:
+#   dist/release/vxlan-tracer-linux-amd64.tar.gz
+#   dist/release/vxlan-tracer-linux-arm64.tar.gz
+#   dist/release/checksums.sha256
+#
+# Each tarball contains:
+#   vxlan-tracer-linux-<arch>/vxlan-tracer       (the binary)
+#   vxlan-tracer-linux-<arch>/bpf/               (BPF objects, if compiled)
+#   vxlan-tracer-linux-<arch>/scripts/           (preflight, run-scenarios, demo, setup-bpf-fs)
+#   vxlan-tracer-linux-<arch>/README.md
+#   vxlan-tracer-linux-<arch>/LICENSE
+#
+# BPF objects are included only if bpf/*.bpf.o files are present (requires Linux +
+# 'make bpf').  Build on amd64 Linux to produce the amd64 BPF objects; arm64 BPF
+# objects must be built on arm64.  The binary cross-compiles from any GOOS.
 package: build-linux-arm64 build-linux-amd64
 	@mkdir -p dist/release
-	@cp dist/$(BINARY)-linux-arm64 dist/release/
-	@cp dist/$(BINARY)-linux-amd64 dist/release/
-	@cp scripts/setup-bpf-fs.sh scripts/setup-netns.sh scripts/teardown-netns.sh \
-	    scripts/cleanup-bpf.sh scripts/run-scenarios.sh dist/release/ 2>/dev/null || true
-	@echo "Release files in dist/release/:"
-	@ls -lh dist/release/
+	@for ARCH in amd64 arm64; do \
+	    STAGEDIR="dist/release/_stage-$$ARCH/vxlan-tracer-linux-$$ARCH"; \
+	    rm -rf "dist/release/_stage-$$ARCH"; \
+	    mkdir -p "$$STAGEDIR/scripts"; \
+	    cp "dist/$(BINARY)-linux-$$ARCH" "$$STAGEDIR/vxlan-tracer"; \
+	    chmod 755 "$$STAGEDIR/vxlan-tracer"; \
+	    if ls bpf/*.bpf.o 2>/dev/null | head -1 | grep -q .; then \
+	        mkdir -p "$$STAGEDIR/bpf"; \
+	        cp bpf/*.bpf.o "$$STAGEDIR/bpf/" 2>/dev/null || true; \
+	    fi; \
+	    for s in scripts/preflight.sh scripts/run-scenarios.sh scripts/demo.sh \
+	              scripts/setup-bpf-fs.sh scripts/setup-netns.sh \
+	              scripts/teardown-netns.sh; do \
+	        [ -f "$$s" ] && cp "$$s" "$$STAGEDIR/scripts/" || true; \
+	    done; \
+	    [ -f README.md ] && cp README.md "$$STAGEDIR/" || true; \
+	    [ -f LICENSE ]   && cp LICENSE   "$$STAGEDIR/" || true; \
+	    tar -C "dist/release/_stage-$$ARCH" -czf \
+	        "dist/release/vxlan-tracer-linux-$$ARCH.tar.gz" \
+	        "vxlan-tracer-linux-$$ARCH"; \
+	    rm -rf "dist/release/_stage-$$ARCH"; \
+	    echo "  created: dist/release/vxlan-tracer-linux-$$ARCH.tar.gz"; \
+	done
+	@cd dist/release && \
+	    sha256sum vxlan-tracer-linux-amd64.tar.gz vxlan-tracer-linux-arm64.tar.gz \
+	    > checksums.sha256 && \
+	    echo "  created: dist/release/checksums.sha256"
+	@echo "Release archives:"
+	@ls -lh dist/release/*.tar.gz dist/release/checksums.sha256
 
 test:
 	go test ./...
