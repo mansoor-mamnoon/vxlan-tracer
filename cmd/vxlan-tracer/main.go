@@ -39,7 +39,13 @@ type jsonReport struct {
 	MaxOuterIPLen         int    `json:"max_outer_ip_len"`
 }
 
-const version = "0.1.0-dev"
+// version, commit, and buildDate are set via -ldflags at build time.
+// Defaults match an untagged local build.
+var (
+	version   = "dev"
+	commit    = "none"
+	buildDate = "unknown"
+)
 
 func main() {
 	overlay := flag.String("overlay", "", "VXLAN overlay interface (e.g. vxlan0)")
@@ -57,7 +63,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("vxlan-tracer %s\n", version)
+		fmt.Printf("vxlan-tracer %s (commit %s, built %s)\n", version, commit, buildDate)
 		os.Exit(0)
 	}
 

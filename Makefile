@@ -48,6 +48,13 @@ CFLAGS_BPF_KPROBE := $(CFLAGS_BPF) $(_TARGET_ARCH_DEFINE)
 
 PREFIX ?= /usr/local
 
+# Version metadata embedded via -ldflags.
+# Override at release time:  VERSION=v0.1.0 make package
+# BUILDDATE is intentionally not embedded by default so builds are reproducible.
+VERSION ?= dev
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)'
+
 .PHONY: all build build-linux-arm64 build-linux-amd64 package install uninstall \
         bpf bpf-check bpf-verify generate lint vet test test-stale-bpf preflight \
         lab-up lab-down smoke-small smoke-large demo scenarios cleanup-bpf \
@@ -59,19 +66,19 @@ all: build
 # build: native platform (whatever GOOS/GOARCH the host provides)
 build: generate
 	@mkdir -p dist
-	go build -o dist/$(BINARY) ./cmd/vxlan-tracer/
+	go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY) ./cmd/vxlan-tracer/
 	@echo "  built: dist/$(BINARY)"
 
 # build-linux-arm64: cross-compile for Linux/aarch64 (required for actual BPF execution)
 build-linux-arm64: generate
 	@mkdir -p dist
-	GOOS=linux GOARCH=arm64 go build -o dist/$(BINARY)-linux-arm64 ./cmd/vxlan-tracer/
+	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY)-linux-arm64 ./cmd/vxlan-tracer/
 	@echo "  built: dist/$(BINARY)-linux-arm64"
 
 # build-linux-amd64: cross-compile for Linux/x86_64
 build-linux-amd64: generate
 	@mkdir -p dist
-	GOOS=linux GOARCH=amd64 go build -o dist/$(BINARY)-linux-amd64 ./cmd/vxlan-tracer/
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY)-linux-amd64 ./cmd/vxlan-tracer/
 	@echo "  built: dist/$(BINARY)-linux-amd64"
 
 # package: build both Linux targets and produce per-arch tarballs under dist/release/.
