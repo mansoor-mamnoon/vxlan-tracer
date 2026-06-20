@@ -36,12 +36,13 @@ CI requirement.
 **Status at time of writing:** not yet run on Linux in this Day 15 session.
 
 The demo script was written and committed in Day 14 (commit `3e034a4`). The scenario it
-demonstrates (stale-MTU VXLAN fragmentation) is covered by the existing Scenario 1 in
-`scripts/run-scenarios.sh`, which DOES run in CI and produces `VXLAN_FRAGMENTATION_OBSERVED`.
+demonstrates (stale-MTU VXLAN fragmentation) is covered by Scenario 2 in
+`scripts/run-scenarios.sh` (second entry: `_run "fragmentation" "VXLAN_FRAGMENTATION_OBSERVED"`),
+which DOES run in CI and produces `VXLAN_FRAGMENTATION_OBSERVED`.
 
 ---
 
-## Expected output (from script review and Scenario 1 CI evidence)
+## Expected output (from script review and Scenario 2 CI evidence)
 
 ```
 === vxlan-tracer demo: VXLAN fragmentation detection ===

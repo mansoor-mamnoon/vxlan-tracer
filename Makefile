@@ -197,7 +197,8 @@ package:
 	    "  scripts/setup-bpf-fs.sh      mount bpffs" \
 	    "" \
 	    "Validated kernels (as of this commit):" \
-	    "  aarch64: 5.15.0-181-generic, 6.10.14-linuxkit — 6/6 scenarios PASS" \
+	    "  aarch64: 5.15.0-181-generic — 6/6 scenarios PASS" \
+	    "           6.10.14-linuxkit  — 5/5 scenarios PASS (tested before scenario 6 was added)" \
 	    "  x86_64:  6.8.0-1059-azure  (GitHub Actions ubuntu-22.04) — 6/6 scenarios PASS" \
 	    "" \
 	    "Verdicts emitted (all 5 reachable):" \
