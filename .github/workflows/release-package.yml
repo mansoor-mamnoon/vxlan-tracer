@@ -1,0 +1,246 @@
+# release-package.yml — build architecture-correct release archives for vxlan-tracer
+#
+# Purpose: produce and validate release tarballs where BPF kprobe objects
+# (kprobes.bpf.o, frag_kprobes.bpf.o) are compiled natively for each target
+# architecture with the correct __TARGET_ARCH_* define.
+#
+# Architecture notes:
+#   amd64: uses __TARGET_ARCH_x86   (PT_REGS_PARM1 → ctx->di, rdi register)
+#   arm64: uses __TARGET_ARCH_arm64 (PT_REGS_PARM1 → ctx->regs[0], x0 register)
+#   TC programs (tc_ingress_eth0, tc_egress_vxlan0) are arch-independent.
+#   Kprobe programs are arch-specific; do NOT mix BPF objects across architectures.
+#
+# Jobs:
+#   build-amd64:  ubuntu-22.04  x86_64  → vxlan-tracer-linux-amd64.tar.gz
+#   build-arm64:  ubuntu-22.04-arm arm64 → vxlan-tracer-linux-arm64.tar.gz
+#   combine:      merge checksums from both jobs into checksums.sha256
+#
+# What this proves when all jobs pass:
+#   - BPF objects for amd64 compile with __TARGET_ARCH_x86
+#   - BPF objects for arm64 compile with __TARGET_ARCH_arm64
+#   - make package fails-closed if BPF objects absent (tested via bpf-verify)
+#   - verify-release-archive.sh PASS on both archives
+#   - Each archive contains: binary, bpf/, scripts/, README.md, LICENSE, MANIFEST.txt
+#
+# What this does NOT prove:
+#   - Scenario runtime (see x86-smoke.yml for 6-scenario suite)
+#   - Production Kubernetes environments
+#   - Kernel portability beyond ubuntu-22.04 kernels
+
+name: Release package (amd64 + arm64)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. v0.1.0-rc1)'
+        required: false
+        default: 'dev'
+
+jobs:
+  build-amd64:
+    name: Build amd64 package
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Capture environment
+        run: |
+          echo "=== Environment ==="
+          uname -a
+          uname -m
+          echo "=== BPF target ==="
+          echo "arch: $(uname -m) → __TARGET_ARCH_x86"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            clang llvm libbpf-dev linux-tools-generic linux-tools-$(uname -r) \
+            iproute2 make gcc build-essential gcc-multilib
+          clang --version | head -1
+          go version
+
+      - name: Mount bpffs
+        run: sudo bash scripts/setup-bpf-fs.sh
+
+      - name: Run Go unit tests
+        run: go test ./...
+
+      - name: Compile BPF objects (amd64 — __TARGET_ARCH_x86)
+        run: |
+          sudo make clean-bpf
+          sudo make bpf
+          echo "=== BPF objects ==="
+          ls -lh bpf/*.bpf.o
+          make bpf-verify
+
+      - name: Build amd64 package
+        env:
+          VERSION: ${{ github.event.inputs.version || 'dev' }}
+        run: |
+          VERSION="${VERSION:-dev}"
+          echo "Building package VERSION=$VERSION"
+          VERSION="$VERSION" make package
+          echo "=== Archive ==="
+          ls -lh dist/release/
+
+      - name: Verify release archive
+        run: |
+          bash scripts/verify-release-archive.sh \
+            dist/release/vxlan-tracer-linux-amd64.tar.gz
+
+      - name: Show archive contents
+        run: |
+          echo "=== Archive contents ==="
+          tar -tzf dist/release/vxlan-tracer-linux-amd64.tar.gz
+          echo "=== MANIFEST.txt ==="
+          tar -xOf dist/release/vxlan-tracer-linux-amd64.tar.gz \
+            "vxlan-tracer-linux-amd64/MANIFEST.txt" 2>/dev/null || echo "(not found)"
+          echo "=== Checksum ==="
+          cat dist/release/checksums-amd64.sha256
+
+      - name: Upload amd64 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: vxlan-tracer-linux-amd64
+          path: |
+            dist/release/vxlan-tracer-linux-amd64.tar.gz
+            dist/release/checksums-amd64.sha256
+          retention-days: 14
+
+  build-arm64:
+    name: Build arm64 package
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Capture environment
+        run: |
+          echo "=== Environment ==="
+          uname -a
+          uname -m
+          echo "=== BPF target ==="
+          echo "arch: $(uname -m) → __TARGET_ARCH_arm64"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            clang llvm libbpf-dev linux-tools-generic linux-tools-$(uname -r) \
+            iproute2 make gcc build-essential
+          clang --version | head -1
+          go version
+
+      - name: Mount bpffs
+        run: sudo bash scripts/setup-bpf-fs.sh
+
+      - name: Run Go unit tests
+        run: go test ./...
+
+      - name: Compile BPF objects (arm64 — __TARGET_ARCH_arm64)
+        run: |
+          sudo make clean-bpf
+          sudo make bpf
+          echo "=== BPF objects ==="
+          ls -lh bpf/*.bpf.o
+          make bpf-verify
+
+      - name: Build arm64 package
+        env:
+          VERSION: ${{ github.event.inputs.version || 'dev' }}
+        run: |
+          VERSION="${VERSION:-dev}"
+          echo "Building package VERSION=$VERSION"
+          VERSION="$VERSION" make package
+          echo "=== Archive ==="
+          ls -lh dist/release/
+
+      - name: Verify release archive
+        run: |
+          bash scripts/verify-release-archive.sh \
+            dist/release/vxlan-tracer-linux-arm64.tar.gz
+
+      - name: Show archive contents
+        run: |
+          echo "=== Archive contents ==="
+          tar -tzf dist/release/vxlan-tracer-linux-arm64.tar.gz
+          echo "=== MANIFEST.txt ==="
+          tar -xOf dist/release/vxlan-tracer-linux-arm64.tar.gz \
+            "vxlan-tracer-linux-arm64/MANIFEST.txt" 2>/dev/null || echo "(not found)"
+          echo "=== Checksum ==="
+          cat dist/release/checksums-arm64.sha256
+
+      - name: Upload arm64 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: vxlan-tracer-linux-arm64
+          path: |
+            dist/release/vxlan-tracer-linux-arm64.tar.gz
+            dist/release/checksums-arm64.sha256
+          retention-days: 14
+
+  combine-checksums:
+    name: Combine checksums
+    needs: [ build-amd64, build-arm64 ]
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download amd64 checksums
+        uses: actions/download-artifact@v4
+        with:
+          name: vxlan-tracer-linux-amd64
+          path: dist/release/
+
+      - name: Download arm64 checksums
+        uses: actions/download-artifact@v4
+        with:
+          name: vxlan-tracer-linux-arm64
+          path: dist/release/
+
+      - name: Combine and verify checksums
+        run: |
+          cd dist/release
+          cat checksums-amd64.sha256 checksums-arm64.sha256 > checksums.sha256
+          echo "=== Combined checksums.sha256 ==="
+          cat checksums.sha256
+          echo "=== Files present ==="
+          ls -lh
+
+      - name: Verify checksums match archives
+        run: |
+          cd dist/release
+          sha256sum --check checksums.sha256
+
+      - name: Upload combined checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: vxlan-tracer-checksums
+          path: dist/release/checksums.sha256
+          retention-days: 14
+
+      - name: Summary
+        run: |
+          echo "=== Release package summary ==="
+          echo "amd64: $(cat dist/release/checksums-amd64.sha256 | awk '{print $1}')"
+          echo "arm64: $(cat dist/release/checksums-arm64.sha256 | awk '{print $1}')"
+          echo "Both packages built and verified."
+          echo "Download artifacts from this workflow run to get the release archives."
