@@ -249,29 +249,26 @@ jobs:
       - name: Validate human output — PTB_SUPPRESSED
         run: |
           echo "=== Human output: PTB_SUPPRESSED ===" | tee /tmp/human-ptb.log
-          # Setup: netns with iptables DROP rule for ICMP type 3 code 4
-          sudo ip netns add ho-ptb-ns 2>/dev/null || true
-          sudo ip link add ho-ptb-v1 type veth peer name ho-ptb-v2
-          sudo ip link set ho-ptb-v1 netns ho-ptb-ns
-          sudo ip link set ho-ptb-v2 netns ho-ptb-ns
-          sudo ip netns exec ho-ptb-ns ip addr add 10.99.2.1/24 dev ho-ptb-v1
-          sudo ip netns exec ho-ptb-ns ip link set ho-ptb-v1 up
-          sudo ip netns exec ho-ptb-ns ip link set ho-ptb-v2 up
-          sudo ip netns exec ho-ptb-ns ip link set lo up
-          sudo ip netns exec ho-ptb-ns iptables -I INPUT -p icmp --icmp-type 3/4 -j DROP
-          # Create bpffs pin directory (binary requires this to exist before attaching)
+          # Use the proven VXLAN topology from setup-netns.sh (same as run-scenarios.sh).
+          # Topology: ns1 (vxlan0 overlay + veth1 underlay) ↔ ns2 (veth2 injector).
+          # PTBs sent from ns2/veth2 arrive at ns1/veth1 as INGRESS traffic.
+          # iptables DROP in ns1 suppresses them before icmp_rcv.
+          sudo bash scripts/setup-netns.sh 2>&1 | tail -5
+          sudo ip netns exec ns1 iptables -I INPUT -p icmp --icmp-type 3/4 -j DROP
+          # Create bpffs pin directory
           sudo mkdir -p /sys/fs/bpf/ho-ptb-test
-          # Run binary for 8s and inject PTBs during window
-          sudo nsenter --net=/var/run/netns/ho-ptb-ns -- dist/vxlan-tracer \
-            --overlay ho-ptb-v1 --underlay ho-ptb-v2 \
+          # Run binary inside ns1 for 10s; inject PTBs from ns2 after 2s
+          sudo nsenter --net=/var/run/netns/ns1 -- dist/vxlan-tracer \
+            --overlay vxlan0 --underlay veth1 \
             --bpf-dir bpf --pin-dir /sys/fs/bpf/ho-ptb-test \
-            --vxlan-port 4789 --duration 8s \
-            >/tmp/human-ptb.log 2>&1 &
+            --vxlan-port 4789 --duration 10s \
+            >>/tmp/human-ptb.log 2>&1 &
           _PID=$!
           sleep 2
-          # Inject synthetic PTBs
-          sudo python3 scripts/inject_ptb.py \
-            --iface ho-ptb-v2 --src 10.99.2.2 --dst 10.99.2.1 --count 5 2>/dev/null || true
+          # Inject PTBs from ns2 toward ns1 (arrives as ingress on veth1)
+          sudo ip netns exec ns2 python3 scripts/inject_ptb.py \
+            --src 192.168.100.2 --dst 192.168.100.1 \
+            --dev veth2 --next-hop-mtu 1400 --count 5 2>/dev/null || true
           wait $_PID 2>/dev/null || true
           echo "=== Human output ===" | tee -a /tmp/human-ptb.log
           cat /tmp/human-ptb.log
@@ -280,7 +277,7 @@ jobs:
           grep -qE "PTB_SUPPRESSED|PTB_DELIVERED|NO_ISSUE_OBSERVED" /tmp/human-ptb.log \
             && echo "[PASS] verdict present" || { echo "[FAIL] no recognized verdict"; _FAIL=1; }
           # Cleanup
-          sudo ip netns del ho-ptb-ns 2>/dev/null || true
+          sudo bash scripts/teardown-netns.sh 2>/dev/null || true
           sudo rm -rf /sys/fs/bpf/ho-ptb-test 2>/dev/null || true
           [ "$_FAIL" = "0" ] || exit 1
 
