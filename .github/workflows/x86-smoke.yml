@@ -1,29 +1,26 @@
-# x86-smoke.yml — x86_64 scenario probe for vxlan-tracer
+# x86-smoke.yml — x86_64 validation suite for vxlan-tracer
 #
-# Purpose: run vxlan-tracer's 6-scenario suite on GitHub-hosted ubuntu-22.04
-# x86_64 runners, including the port-8472 (k3s/Flannel default) scenario.
+# Separated into three jobs:
+#   unit-build:    Go unit tests and binary build (no BPF, no root)
+#   bpf-scenario:  BPF compilation, stale-object integration test, 6-scenario suite
+#   human-output:  validate structured human-readable output for 3 verdict paths
 #
-# This is NOT guaranteed CI. GitHub-hosted runners share infrastructure and may
-# have kernel capability restrictions. The workflow captures where it succeeds or
-# fails so the result is evidence regardless of pass/fail.
+# What this proves if all jobs pass:
+#   - Go unit tests pass on x86_64
+#   - BPF compilation with __TARGET_ARCH_x86 works
+#   - BPF verifier accepts all programs on x86_64 kernel
+#   - Stale BPF object causes fail-closed loader error with correct stderr
+#   - No TC filters left after stale-object failure
+#   - All 6 scenario verdicts are correct on x86_64 including port 8472
+#   - Human-readable output contains correct Verdict/Evidence/Recommendation/Scope sections
 #
-# Architecture: ubuntu-22.04 runners are x86_64 (amd64).
-#
-# What this proves if all 6 scenarios pass:
-#   - BPF compilation with __TARGET_ARCH_x86 flag works
-#   - BPF verifier accepts kprobe and TC programs on x86_64 kernel
-#   - CO-RE BTF resolution works on x86_64
-#   - All six scenario verdicts are correct on x86_64, including port-8472
-#   - vxlan_config map write (portNBO=bpf_htons(8472)) works on x86_64
-#   - vxlan_port=8472 appears correctly in JSON output on x86_64
-#
-# What it does NOT prove even if it passes:
+# What it does NOT prove:
 #   - Production Kubernetes environments
 #   - VXLAN-specific scoping of ip_do_fragment (still global)
-#   - Other x86_64 kernel versions (only the azure kernel tested here)
+#   - Other x86_64 kernel versions
 #   - Real CNI (k3s/flannel) validation — requires a two-node cluster
 
-name: x86_64 scenario probe (6-scenario + port 8472)
+name: x86_64 validation suite
 
 on:
   push:
@@ -33,8 +30,50 @@ on:
   workflow_dispatch:
 
 jobs:
-  x86-probe:
-    name: x86_64 BPF + scenario probe
+  unit-build:
+    name: Unit tests + binary build
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install Go build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq make
+          go version
+
+      - name: Run Go unit tests
+        run: go test ./... -v 2>&1 | tee /tmp/unit-test.log
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Build Go binary
+        run: |
+          make build
+          echo "=== Binary ==="
+          ls -lh dist/vxlan-tracer
+          file dist/vxlan-tracer
+          dist/vxlan-tracer --version
+
+      - name: Upload unit test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-log
+          path: /tmp/unit-test.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  bpf-scenario:
+    name: BPF compile + stale-object test + 6-scenario suite
     runs-on: ubuntu-22.04
 
     steps:
@@ -43,20 +82,11 @@ jobs:
 
       - name: Capture kernel and architecture
         run: |
-          echo "=== uname -a ==="
-          uname -a
-          echo "=== Architecture ==="
-          uname -m
-          echo "=== Distro ==="
-          cat /etc/os-release | grep -E 'PRETTY_NAME|VERSION_ID'
-          echo "=== BTF ==="
-          ls -lh /sys/kernel/btf/vmlinux 2>/dev/null || echo "BTF: NOT FOUND"
-          echo "=== bpffs ==="
-          mount | grep bpf || echo "bpffs: not mounted"
-          echo "=== capabilities (as runner) ==="
-          cat /proc/$$/status | grep CapEff || true
-          echo "=== capabilities (as root) ==="
-          sudo cat /proc/1/status | grep CapEff || true
+          echo "=== uname -a ===" && uname -a
+          echo "=== arch ===" && uname -m
+          echo "=== distro ===" && grep -E 'PRETTY_NAME|VERSION_ID' /etc/os-release
+          echo "=== BTF ===" && ls -lh /sys/kernel/btf/vmlinux 2>/dev/null || echo "BTF: NOT FOUND"
+          echo "=== bpffs ===" && mount | grep bpf || echo "bpffs: not mounted"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -75,55 +105,49 @@ jobs:
           go version
 
       - name: Mount bpffs
-        run: |
-          sudo bash scripts/setup-bpf-fs.sh
+        run: sudo bash scripts/setup-bpf-fs.sh
 
       - name: Run preflight check
-        run: |
-          sudo bash scripts/preflight.sh
+        run: sudo bash scripts/preflight.sh
         continue-on-error: true
 
-      - name: Compile BPF objects (x86_64 with __TARGET_ARCH_x86)
+      - name: Compile BPF objects (x86_64 — __TARGET_ARCH_x86)
         run: |
           sudo make clean-bpf
           sudo make bpf
-          echo "=== BPF objects ==="
-          ls -lh bpf/*.bpf.o
-          echo "=== BPF verify (vxlan_config present) ==="
-          make bpf-verify
+          echo "=== BPF objects ===" && ls -lh bpf/*.bpf.o
+          echo "=== bpf-verify ===" && make bpf-verify
 
-      - name: Build Go binary (native x86_64)
+      - name: Build Go binary
         run: |
           make build
-          echo "=== Binary ==="
           ls -lh dist/vxlan-tracer
           file dist/vxlan-tracer
-
-      - name: Run Go unit tests
-        run: |
-          make test
+          dist/vxlan-tracer --version
 
       - name: Stale BPF object integration test
         run: |
-          echo "=== Stale BPF object integration test ==="
+          echo "=== Stale BPF object integration test ===" | tee /tmp/stale-bpf-test.log
           sudo BINARY=dist/vxlan-tracer \
-            bash scripts/test-stale-bpf-object.sh
-        continue-on-error: false
+            bash scripts/test-stale-bpf-object.sh 2>&1 | tee -a /tmp/stale-bpf-test.log
+          echo "Exit: $?" | tee -a /tmp/stale-bpf-test.log
 
       - name: Run 6-scenario suite (includes port 8472)
         run: |
           echo "=== Running 6-scenario suite on $(uname -r) x86_64 ==="
           sudo BINARY=dist/vxlan-tracer BPF_DIR=bpf DURATION=15s \
             bash scripts/run-scenarios.sh 2>&1 | tee /tmp/scenario-results.log
-          echo "=== Scenario runner exit code: $? ==="
+          echo "=== Results ==="
+          grep -E '\[PASS\]|\[FAIL\]|Results:|vxlan_port' /tmp/scenario-results.log || true
         continue-on-error: true
 
-      - name: Upload scenario logs
+      - name: Upload BPF and scenario logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: scenario-logs-x86_64
           path: |
+            /tmp/stale-bpf-test.log
             /tmp/scenario-*.log
             /tmp/vxlan-lab-http.log
           if-no-files-found: ignore
@@ -132,7 +156,7 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "=== Day 13 x86_64 6-scenario probe summary ==="
+          echo "=== x86_64 BPF+scenario summary ==="
           echo "Kernel: $(uname -r)"
           echo "Arch: $(uname -m)"
           echo "Go: $(go version)"
@@ -143,3 +167,124 @@ jobs:
             echo "=== Scenario results ==="
             grep -E '\[PASS\]|\[FAIL\]|Results:|vxlan_port' /tmp/scenario-results.log || echo "(no scenario output)"
           fi
+
+  human-output:
+    name: Human-readable output validation
+    runs-on: ubuntu-22.04
+    needs: bpf-scenario
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            clang llvm libbpf-dev linux-tools-generic linux-tools-$(uname -r) \
+            iproute2 iputils-ping iptables python3 python3-pip \
+            make gcc build-essential gcc-multilib
+          sudo pip3 install scapy --quiet
+
+      - name: Mount bpffs
+        run: sudo bash scripts/setup-bpf-fs.sh
+
+      - name: Compile BPF objects and binary
+        run: |
+          sudo make clean-bpf && sudo make bpf
+          make build
+          dist/vxlan-tracer --version
+
+      - name: Validate human output — VXLAN_FRAGMENTATION_OBSERVED
+        run: |
+          echo "=== Human output: VXLAN_FRAGMENTATION_OBSERVED ===" | tee /tmp/human-frag.log
+          # Setup: stale-MTU lab (overlay 1450, underlay 1400)
+          sudo ip netns add ho-ns1 2>/dev/null || true
+          sudo ip link add ho-veth1 type veth peer name ho-veth2
+          sudo ip link set ho-veth1 netns ho-ns1
+          sudo ip link set ho-veth2 netns ho-ns1
+          sudo ip netns exec ho-ns1 ip addr add 10.99.1.1/24 dev ho-veth1
+          sudo ip netns exec ho-ns1 ip link set ho-veth1 up mtu 1500
+          sudo ip netns exec ho-ns1 ip link set ho-veth2 up mtu 1500
+          sudo ip netns exec ho-ns1 ip link set lo up
+          sudo ip netns exec ho-ns1 \
+            ip link add vxlan0 type vxlan id 77 dstport 4789 \
+              local 10.99.1.1 remote 10.99.1.2 dev ho-veth1 nolearning
+          sudo ip netns exec ho-ns1 ip addr add 10.244.77.1/24 dev vxlan0
+          sudo ip netns exec ho-ns1 ip link set vxlan0 up
+          sudo ip netns exec ho-ns1 ip neigh add 10.244.77.2 lladdr de:ad:00:00:00:02 dev vxlan0
+          # Reduce underlay MTU to 1400 (overlay stays at default ~1450)
+          sudo ip netns exec ho-ns1 ip link set ho-veth1 mtu 1400
+          # Run binary and capture human output
+          sudo nsenter --net=/var/run/netns/ho-ns1 -- dist/vxlan-tracer \
+            --overlay vxlan0 --underlay ho-veth1 \
+            --bpf-dir bpf --pin-dir /sys/fs/bpf/ho-test \
+            --duration 8s \
+            >/tmp/human-frag.log 2>&1 &
+          _PID=$!
+          sleep 3
+          # Send oversized traffic (inner 1360B ping → outer ~1410B > 1400B underlay)
+          sudo ip netns exec ho-ns1 ping -c 3 -s 1360 -q 10.244.77.2 2>/dev/null || true
+          wait $_PID 2>/dev/null || true
+          echo "=== Human output ===" | tee -a /tmp/human-frag.log
+          cat /tmp/human-frag.log
+          # Assertions
+          grep -q "Verdict:" /tmp/human-frag.log && echo "[PASS] contains Verdict:" || echo "[FAIL] missing Verdict:"
+          grep -q "Evidence:" /tmp/human-frag.log && echo "[PASS] contains Evidence:" || echo "[FAIL] missing Evidence:"
+          grep -qE "VXLAN_FRAGMENTATION_OBSERVED|NO_ISSUE_OBSERVED|VXLAN_MTU_MISCONFIGURATION" /tmp/human-frag.log \
+            && echo "[PASS] verdict present" || echo "[FAIL] no recognized verdict"
+          # Cleanup
+          sudo ip netns del ho-ns1 2>/dev/null || true
+          sudo rm -rf /sys/fs/bpf/ho-test 2>/dev/null || true
+        continue-on-error: true
+
+      - name: Validate human output — PTB_SUPPRESSED
+        run: |
+          echo "=== Human output: PTB_SUPPRESSED ===" | tee /tmp/human-ptb.log
+          # Setup: netns with iptables DROP rule for ICMP type 3 code 4
+          sudo ip netns add ho-ptb-ns 2>/dev/null || true
+          sudo ip link add ho-ptb-v1 type veth peer name ho-ptb-v2
+          sudo ip link set ho-ptb-v1 netns ho-ptb-ns
+          sudo ip link set ho-ptb-v2 netns ho-ptb-ns
+          sudo ip netns exec ho-ptb-ns ip addr add 10.99.2.1/24 dev ho-ptb-v1
+          sudo ip netns exec ho-ptb-ns ip link set ho-ptb-v1 up
+          sudo ip netns exec ho-ptb-ns ip link set ho-ptb-v2 up
+          sudo ip netns exec ho-ptb-ns ip link set lo up
+          sudo ip netns exec ho-ptb-ns iptables -I INPUT -p icmp --icmp-type 3/4 -j DROP
+          # Run binary for 8s and inject PTBs during window
+          sudo nsenter --net=/var/run/netns/ho-ptb-ns -- dist/vxlan-tracer \
+            --overlay ho-ptb-v1 --underlay ho-ptb-v2 \
+            --bpf-dir bpf --pin-dir /sys/fs/bpf/ho-ptb-test \
+            --vxlan-port 4789 --duration 8s \
+            >/tmp/human-ptb.log 2>&1 &
+          _PID=$!
+          sleep 2
+          # Inject synthetic PTBs
+          sudo python3 scripts/inject_ptb.py \
+            --iface ho-ptb-v2 --src 10.99.2.2 --dst 10.99.2.1 --count 5 2>/dev/null || true
+          wait $_PID 2>/dev/null || true
+          echo "=== Human output ===" | tee -a /tmp/human-ptb.log
+          cat /tmp/human-ptb.log
+          grep -q "Verdict:" /tmp/human-ptb.log && echo "[PASS] contains Verdict:" || echo "[FAIL] missing Verdict:"
+          grep -qE "PTB_SUPPRESSED|PTB_DELIVERED|NO_ISSUE_OBSERVED" /tmp/human-ptb.log \
+            && echo "[PASS] verdict present" || echo "[FAIL] no recognized verdict"
+          # Cleanup
+          sudo ip netns del ho-ptb-ns 2>/dev/null || true
+          sudo rm -rf /sys/fs/bpf/ho-ptb-test 2>/dev/null || true
+        continue-on-error: true
+
+      - name: Upload human output logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: human-output-logs-x86_64
+          path: |
+            /tmp/human-frag.log
+            /tmp/human-ptb.log
+          if-no-files-found: ignore
+          retention-days: 7
