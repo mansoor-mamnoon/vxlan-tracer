@@ -49,16 +49,29 @@ CFLAGS_BPF_KPROBE := $(CFLAGS_BPF) $(_TARGET_ARCH_DEFINE)
 PREFIX ?= /usr/local
 
 # Version metadata embedded via -ldflags.
-# Override at release time:  VERSION=v0.1.0 make package
+# Override at release time:  VERSION=v0.1.0-rc1 make package
 # BUILDDATE is intentionally not embedded by default so builds are reproducible.
 VERSION ?= dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)'
 
+# PACKAGE_ARCH: arch string for 'make package'. Auto-derived from host arch.
+# BPF kprobe objects embed __TARGET_ARCH_x86 or __TARGET_ARCH_arm64 at compile
+# time — they are NOT portable across architectures. Run 'make package' natively
+# on each target architecture after 'make bpf'.
+# Handles: Linux aarch64, Linux x86_64, and macOS arm64 (fails with Linux check).
+_NATIVE_PKG_ARCH := $(shell if [ "$(_HOST_ARCH)" = "aarch64" ] || [ "$(_HOST_ARCH)" = "arm64" ]; then echo arm64; elif [ "$(_HOST_ARCH)" = "x86_64" ]; then echo amd64; else echo unsupported; fi)
+PACKAGE_ARCH ?= $(_NATIVE_PKG_ARCH)
+
+_BPF_ARCH_DEFINE := $(shell if [ "$(PACKAGE_ARCH)" = "arm64" ]; then echo __TARGET_ARCH_arm64; elif [ "$(PACKAGE_ARCH)" = "amd64" ]; then echo __TARGET_ARCH_x86; else echo unknown; fi)
+
+# Required BPF objects for a complete release archive. Hard-checked by make package.
+_BPF_REQUIRED := tc_ingress_eth0.bpf.o tc_egress_vxlan0.bpf.o kprobes.bpf.o frag_kprobes.bpf.o
+
 .PHONY: all build build-linux-arm64 build-linux-amd64 package install uninstall \
         bpf bpf-check bpf-verify generate lint vet test test-stale-bpf preflight \
         lab-up lab-down smoke-small smoke-large demo scenarios cleanup-bpf \
-        attach-bpf check-symbols clean clean-bpf help
+        attach-bpf check-symbols clean clean-bpf help verify-release-archive
 
 all: build
 
@@ -81,54 +94,143 @@ build-linux-amd64: generate
 	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY)-linux-amd64 ./cmd/vxlan-tracer/
 	@echo "  built: dist/$(BINARY)-linux-amd64"
 
-# package: build both Linux targets and produce per-arch tarballs under dist/release/.
+# package: build a native-arch release archive under dist/release/.
 #
-# Archives produced:
-#   dist/release/vxlan-tracer-linux-amd64.tar.gz
-#   dist/release/vxlan-tracer-linux-arm64.tar.gz
-#   dist/release/checksums.sha256
+# MUST be run on Linux after 'make bpf' compiles the BPF objects.
+# Hard-fails if any required BPF object is missing — no silent incomplete archives.
+# Produces only the host-architecture package because BPF kprobe objects embed
+# __TARGET_ARCH_x86 or __TARGET_ARCH_arm64 and are NOT portable across architectures.
 #
-# Each tarball contains:
-#   vxlan-tracer-linux-<arch>/vxlan-tracer       (the binary)
-#   vxlan-tracer-linux-<arch>/bpf/               (BPF objects, if compiled)
-#   vxlan-tracer-linux-<arch>/scripts/           (preflight, run-scenarios, demo, setup-bpf-fs)
+# To build both amd64 and arm64 packages:
+#   Run 'make package' on x86_64 Linux  → dist/release/vxlan-tracer-linux-amd64.tar.gz
+#   Run 'make package' on aarch64 Linux → dist/release/vxlan-tracer-linux-arm64.tar.gz
+#   Combine checksums: cat checksums-amd64.sha256 checksums-arm64.sha256 > checksums.sha256
+#
+# Override version: VERSION=v0.1.0-rc1 make package
+#
+# Archive contents:
+#   vxlan-tracer-linux-<arch>/vxlan-tracer        binary (Linux/<arch> ELF)
+#   vxlan-tracer-linux-<arch>/bpf/                4 required BPF objects (arch-correct)
+#   vxlan-tracer-linux-<arch>/scripts/            runtime scripts
 #   vxlan-tracer-linux-<arch>/README.md
 #   vxlan-tracer-linux-<arch>/LICENSE
-#
-# BPF objects are included only if bpf/*.bpf.o files are present (requires Linux +
-# 'make bpf').  Build on amd64 Linux to produce the amd64 BPF objects; arm64 BPF
-# objects must be built on arm64.  The binary cross-compiles from any GOOS.
-package: build-linux-arm64 build-linux-amd64
-	@mkdir -p dist/release
-	@for ARCH in amd64 arm64; do \
-	    STAGEDIR="dist/release/_stage-$$ARCH/vxlan-tracer-linux-$$ARCH"; \
-	    rm -rf "dist/release/_stage-$$ARCH"; \
-	    mkdir -p "$$STAGEDIR/scripts"; \
-	    cp "dist/$(BINARY)-linux-$$ARCH" "$$STAGEDIR/vxlan-tracer"; \
-	    chmod 755 "$$STAGEDIR/vxlan-tracer"; \
-	    if ls bpf/*.bpf.o 2>/dev/null | head -1 | grep -q .; then \
-	        mkdir -p "$$STAGEDIR/bpf"; \
-	        cp bpf/*.bpf.o "$$STAGEDIR/bpf/" 2>/dev/null || true; \
+#   vxlan-tracer-linux-<arch>/MANIFEST.txt        release metadata
+package:
+	@if [ "$$(uname -s)" != "Linux" ]; then \
+	    echo "ERROR: make package requires Linux (BPF objects must be compiled natively)."; \
+	    echo "  This host is: $$(uname -s)"; \
+	    echo "  Fix: run on $(PACKAGE_ARCH) Linux after make bpf"; \
+	    exit 1; \
+	fi
+	@if [ "$(PACKAGE_ARCH)" = "unsupported" ]; then \
+	    echo "ERROR: unsupported host architecture '$(_HOST_ARCH)'."; \
+	    echo "  vxlan-tracer supports x86_64 (amd64) and aarch64 (arm64) only."; \
+	    exit 1; \
+	fi
+	@echo "--- Verifying required BPF objects for $(PACKAGE_ARCH) ---"
+	@_MISSING=0; \
+	for obj in $(_BPF_REQUIRED); do \
+	    if [ ! -f "bpf/$$obj" ]; then \
+	        echo "  MISSING: bpf/$$obj"; \
+	        _MISSING=1; \
+	    else \
+	        echo "  OK:      bpf/$$obj  ($$(wc -c < bpf/$$obj) bytes)"; \
 	    fi; \
-	    for s in scripts/preflight.sh scripts/run-scenarios.sh scripts/demo.sh \
-	              scripts/setup-bpf-fs.sh scripts/setup-netns.sh \
-	              scripts/teardown-netns.sh; do \
-	        [ -f "$$s" ] && cp "$$s" "$$STAGEDIR/scripts/" || true; \
-	    done; \
-	    [ -f README.md ] && cp README.md "$$STAGEDIR/" || true; \
-	    [ -f LICENSE ]   && cp LICENSE   "$$STAGEDIR/" || true; \
-	    tar -C "dist/release/_stage-$$ARCH" -czf \
-	        "dist/release/vxlan-tracer-linux-$$ARCH.tar.gz" \
-	        "vxlan-tracer-linux-$$ARCH"; \
-	    rm -rf "dist/release/_stage-$$ARCH"; \
-	    echo "  created: dist/release/vxlan-tracer-linux-$$ARCH.tar.gz"; \
-	done
+	done; \
+	if [ "$$_MISSING" = "1" ]; then \
+	    echo ""; \
+	    echo "ERROR: One or more required BPF objects are missing."; \
+	    echo "  BPF objects must be compiled on $(PACKAGE_ARCH) Linux before packaging."; \
+	    echo "  Fix: make clean-bpf && make bpf"; \
+	    echo "       (requires clang, libbpf-dev, and linux-libc-dev)"; \
+	    exit 1; \
+	fi
+	@echo "--- Running bpf-verify (vxlan_config symbol check) ---"
+	@$(MAKE) --no-print-directory bpf-verify
+	@echo "--- Building $(PACKAGE_ARCH) binary (VERSION=$(VERSION) COMMIT=$(COMMIT)) ---"
+	@$(MAKE) --no-print-directory build-linux-$(PACKAGE_ARCH) VERSION=$(VERSION) COMMIT=$(COMMIT)
+	@echo "--- Staging release archive ---"
+	@STAGEDIR="dist/release/_stage-$(PACKAGE_ARCH)/vxlan-tracer-linux-$(PACKAGE_ARCH)"; \
+	TARBALL="dist/release/vxlan-tracer-linux-$(PACKAGE_ARCH).tar.gz"; \
+	rm -rf "dist/release/_stage-$(PACKAGE_ARCH)"; \
+	mkdir -p dist/release "$$STAGEDIR/bpf" "$$STAGEDIR/scripts"; \
+	cp "dist/$(BINARY)-linux-$(PACKAGE_ARCH)" "$$STAGEDIR/vxlan-tracer"; \
+	chmod 755 "$$STAGEDIR/vxlan-tracer"; \
+	for obj in $(_BPF_REQUIRED); do \
+	    cp "bpf/$$obj" "$$STAGEDIR/bpf/"; \
+	done; \
+	for s in scripts/preflight.sh scripts/run-scenarios.sh scripts/demo.sh \
+	          scripts/setup-bpf-fs.sh scripts/setup-netns.sh \
+	          scripts/teardown-netns.sh; do \
+	    [ -f "$$s" ] && cp "$$s" "$$STAGEDIR/scripts/" || true; \
+	done; \
+	[ -f README.md ] && cp README.md "$$STAGEDIR/"; \
+	[ -f LICENSE ]   && cp LICENSE   "$$STAGEDIR/"; \
+	printf '%s\n' \
+	    "vxlan-tracer-linux-$(PACKAGE_ARCH) release manifest" \
+	    "==========================================================" \
+	    "Version:        $(VERSION)" \
+	    "Commit:         $(COMMIT)" \
+	    "Architecture:   $(PACKAGE_ARCH)" \
+	    "BPF target:     $(_BPF_ARCH_DEFINE)" \
+	    "" \
+	    "KERNEL COMPATIBILITY CAVEAT:" \
+	    "  BPF objects use CO-RE (Compile Once, Run Everywhere) and require" \
+	    "  Linux >= 5.15 with CONFIG_DEBUG_INFO_BTF=y (/sys/kernel/btf/vmlinux)." \
+	    "  Portability beyond tested kernels is likely but not guaranteed." \
+	    "  Validate on your specific kernel before production use." \
+	    "" \
+	    "Binary:" \
+	    "  vxlan-tracer  (Linux/$(PACKAGE_ARCH) ELF; requires root or CAP_BPF+CAP_NET_ADMIN)" \
+	    "" \
+	    "BPF objects (compiled for $(PACKAGE_ARCH) with $(_BPF_ARCH_DEFINE)):" \
+	    "  bpf/tc_ingress_eth0.bpf.o   TC sched_cls ingress; counts PTBs pre-netfilter" \
+	    "  bpf/tc_egress_vxlan0.bpf.o  TC sched_cls egress; records outer packet sizes" \
+	    "  bpf/kprobes.bpf.o            icmp_rcv kprobe; counts PTBs post-netfilter (arch-specific)" \
+	    "  bpf/frag_kprobes.bpf.o       ip_do_fragment kprobe; counts fragmentation (arch-specific)" \
+	    "" \
+	    "Scripts:" \
+	    "  scripts/preflight.sh         pre-flight environment check" \
+	    "  scripts/run-scenarios.sh     6-scenario diagnostic test suite" \
+	    "  scripts/demo.sh              VXLAN fragmentation demo (~25 s)" \
+	    "  scripts/setup-bpf-fs.sh      mount bpffs" \
+	    "" \
+	    "Validated kernels (as of this commit):" \
+	    "  aarch64: 5.15.0-181-generic, 6.10.14-linuxkit — 6/6 scenarios PASS" \
+	    "  x86_64:  6.8.0-1059-azure  (GitHub Actions ubuntu-22.04) — 6/6 scenarios PASS" \
+	    "" \
+	    "Verdicts emitted (all 5 reachable):" \
+	    "  VXLAN_FRAGMENTATION_OBSERVED  VXLAN_MTU_MISCONFIGURATION  VXLAN_MTU_RISK" \
+	    "  PTB_DELIVERED  PTB_SUPPRESSED  NO_ISSUE_OBSERVED" \
+	    "" \
+	    "Known limitations:" \
+	    "  - ip_do_fragment is global: frag_events_total includes ALL IP fragmentation." \
+	    "  - PTB inner 5-tuple not extractable from ICMP payload." \
+	    "  - Production Kubernetes (k3s/flannel) NOT validated; netns lab only." \
+	    "  - Two-node CNI validation not complete." \
+	    "  See docs/fragmentation-scoping.md and docs/forbidden-claims.md." \
+	    > "$$STAGEDIR/MANIFEST.txt"; \
+	tar -C "dist/release/_stage-$(PACKAGE_ARCH)" -czf "$$TARBALL" \
+	    "vxlan-tracer-linux-$(PACKAGE_ARCH)"; \
+	rm -rf "dist/release/_stage-$(PACKAGE_ARCH)"; \
+	echo "  created: $$TARBALL"
 	@cd dist/release && \
-	    sha256sum vxlan-tracer-linux-amd64.tar.gz vxlan-tracer-linux-arm64.tar.gz \
-	    > checksums.sha256 && \
-	    echo "  created: dist/release/checksums.sha256"
-	@echo "Release archives:"
-	@ls -lh dist/release/*.tar.gz dist/release/checksums.sha256
+	    sha256sum "vxlan-tracer-linux-$(PACKAGE_ARCH).tar.gz" \
+	    > "checksums-$(PACKAGE_ARCH).sha256" && \
+	    echo "  created: dist/release/checksums-$(PACKAGE_ARCH).sha256"
+	@echo ""
+	@echo "Release archive ($(PACKAGE_ARCH)):"
+	@ls -lh "dist/release/vxlan-tracer-linux-$(PACKAGE_ARCH).tar.gz" \
+	         "dist/release/checksums-$(PACKAGE_ARCH).sha256"
+	@echo ""
+	@echo "Verify archive contents:"
+	@echo "  bash scripts/verify-release-archive.sh dist/release/vxlan-tracer-linux-$(PACKAGE_ARCH).tar.gz"
+
+# verify-release-archive: validate a release tarball produced by make package.
+# Usage: make verify-release-archive ARCHIVE=dist/release/vxlan-tracer-linux-amd64.tar.gz
+ARCHIVE ?= dist/release/vxlan-tracer-linux-$(PACKAGE_ARCH).tar.gz
+verify-release-archive:
+	@bash scripts/verify-release-archive.sh "$(ARCHIVE)"
 
 test:
 	go test ./...
@@ -342,7 +444,8 @@ help:
 	@echo "  build                    Go binary (native platform, output: dist/vxlan-tracer)"
 	@echo "  build-linux-arm64        Cross-compile for Linux/aarch64"
 	@echo "  build-linux-amd64        Cross-compile for Linux/x86_64"
-	@echo "  package                  Build both Linux targets + release bundle in dist/release/"
+	@echo "  package                  Build native-arch release archive with BPF objects (Linux only; hard-fails if BPF absent)"
+	@echo "  verify-release-archive   Validate a release tarball [ARCHIVE=path]"
 	@echo "  install [PREFIX=...]     Install binary to PREFIX/bin (Linux only, default /usr/local)"
 	@echo "  uninstall [PREFIX=...]   Remove installed binary"
 	@echo "  test                     go test ./..."
