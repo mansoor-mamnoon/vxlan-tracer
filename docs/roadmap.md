@@ -101,8 +101,14 @@ namespace environment. No production deployment required.
 - [x] Four kernels in validated matrix: 6.10.14-linuxkit, 5.15.0-181-generic, 6.8.0-1052-azure, 6.8.0-1059-azure (Day 13)
 - [x] docs/release-checklist.md — pre-release gate items (Day 13)
 - [x] docs/forbidden-claims.md: added entry 15 distinguishing netns-lab from CNI validation (Day 13)
-- [ ] Real two-node k3s/flannel validation: cross-node pod traffic on flannel.1 port 8472
-- [ ] CNI validation: PTB_DELIVERED or VXLAN_FRAGMENTATION_OBSERVED confirmed on real CNI traffic
+- [x] scripts/demo.sh: self-contained stale-MTU VXLAN fragmentation demo; make demo target (Day 14)
+- [x] printHuman(): structured human-readable output — Verdict/Evidence/Recommendation/Scope sections (Day 14)
+- [x] Per-arch release packages: vxlan-tracer-linux-{amd64,arm64}.tar.gz + checksums.sha256 (Day 14)
+- [x] Version metadata via -ldflags: version/commit/buildDate; --version shows all three (Day 14)
+- [x] LICENSE: MIT, Copyright 2026 Mansoor Mamnoon (Day 14)
+- [x] README: plain-English symptom, demo command, build/install section, updated status table (Day 14)
+- [ ] Real two-node k3s/flannel validation: cross-node pod traffic on flannel.1 port 8472 (V1)
+- [ ] CNI validation: PTB_DELIVERED or VXLAN_FRAGMENTATION_OBSERVED confirmed on real CNI traffic (V1)
 
 ### V0 scope limitations
 

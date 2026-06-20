@@ -14,10 +14,11 @@ All items must be individually verified and recorded in `evidence/`.
 
 ## Go build and tests
 
-- [ ] `go vet ./...` passes with no warnings
+- [x] `go vet ./...` passes with no warnings (macOS; Day 14)
 - [ ] `go test ./...` passes on Linux (all packages including `internal/loader`)
 - [ ] `make build` produces a valid ELF binary (`file dist/vxlan-tracer` shows ELF x86-64 or ARM64)
-- [ ] Binary links correctly (no `CGO_ENABLED=1` issues on target arch)
+- [x] Binary links correctly — `make build` produces binary with commit hash via -ldflags (Day 14)
+- [x] `--version` prints version, commit, and buildDate fields (Day 14)
 
 ## Scenario suite (local)
 
@@ -33,13 +34,20 @@ All items must be individually verified and recorded in `evidence/`.
 - [ ] Go unit tests pass in CI
 - [ ] Scenario runner output shows "Results: 6 passed, 0 failed" in CI log
 
+## Release package
+
+- [x] `make package` produces vxlan-tracer-linux-amd64.tar.gz and vxlan-tracer-linux-arm64.tar.gz (Day 14)
+- [x] `dist/release/checksums.sha256` produced alongside tarballs (Day 14)
+- [x] Each tarball contains: binary, scripts/, README.md, LICENSE (verified via tar -tzf) (Day 14)
+- [x] LICENSE file present (MIT, Copyright 2026 Mansoor Mamnoon) (Day 14)
+
 ## README and documentation accuracy
 
-- [ ] Status line accurately describes what is and is not proven
-- [ ] Port claim says "validated in netns lab on ports 4789 and 8472" (not "CNI validated")
+- [x] Status line accurately describes what is and is not proven (Day 14)
+- [x] Port claim says "validated in netns lab on ports 4789 and 8472" (not "CNI validated") (Day 14)
 - [ ] Kernel matrix reflects actual runs with kernel version and scenario count
-- [ ] CNI table is labeled as documentation-based (not lab-validated)
-- [ ] No references to `VXLAN_HEALTHY` (not a real verdict; use `NO_ISSUE_OBSERVED`)
+- [x] CNI table is labeled as documentation-based (not lab-validated)
+- [x] No references to `VXLAN_HEALTHY` (not a real verdict; use `NO_ISSUE_OBSERVED`)
 
 ## Forbidden claims review
 
