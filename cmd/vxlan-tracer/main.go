@@ -155,9 +155,108 @@ func main() {
 	if *jsonOut {
 		printJSON(verdict, obs, cfg.Overlay, cfg.Underlay, effectivePort, vxlanVNI)
 	} else {
-		fmt.Printf("verdict: %s\n", verdict.Verdict)
-		fmt.Printf("%s\n", verdict.Message)
+		printHuman(verdict, obs)
 	}
+}
+
+// printHuman prints a structured human-readable diagnostic report.
+// Sections: Verdict, Evidence, Recommendation (when applicable), Scope/Note.
+// JSON output (--json flag) is handled separately by printJSON and is stable.
+func printHuman(d diag.Diagnosis, obs diag.Observation) {
+	fmt.Printf("\nVerdict:  %s\n", d.Verdict)
+
+	switch d.Verdict {
+	case diag.VerdictFragmentationObserved:
+		fmt.Println("Evidence:")
+		fmt.Printf("  ip_do_fragment events:   %d\n", obs.FragEventsTotal)
+		if obs.MaxOuterIPLen > 0 {
+			fmt.Printf("  largest outer IP seen:   %d B\n", obs.MaxOuterIPLen)
+		}
+		if obs.UnderlayMTU > 0 {
+			fmt.Printf("  underlay MTU:            %d B", obs.UnderlayMTU)
+			if obs.MaxOuterIPLen > obs.UnderlayMTU {
+				fmt.Printf("  (outer packet exceeded by %d B)", obs.MaxOuterIPLen-obs.UnderlayMTU)
+			}
+			fmt.Println()
+		}
+		if obs.UnderlayMTU > 0 {
+			fmt.Println("Recommendation:")
+			fmt.Printf("  set overlay MTU to %d B or lower\n", obs.UnderlayMTU-diag.VXLANOverheadBytes)
+			fmt.Println("  (VXLAN overhead is 50 B; safe overlay MTU = underlay MTU − 50)")
+		}
+		fmt.Println("Scope:")
+		switch d.FragmentationScope {
+		case diag.FragScopeGlobalCorroborated:
+			fmt.Println("  global fragmentation counter corroborated by VXLAN TC egress")
+			fmt.Println("  (both ip_do_fragment and oversized outer packets observed)")
+		case diag.FragScopeGlobalUnscoped:
+			fmt.Println("  global fragmentation counter — no VXLAN TC egress corroboration")
+			fmt.Println("  (ip_do_fragment fires for all IP fragmentation on this host)")
+		}
+		fmt.Println("  See docs/fragmentation-scoping.md for limitations.")
+
+	case diag.VerdictPTBDelivered:
+		fmt.Println("Evidence:")
+		fmt.Printf("  PTBs at TC ingress (pre-netfilter): %d\n", obs.PTBIngressTotal)
+		fmt.Printf("  PTBs at icmp_rcv  (post-netfilter): %d  ← kernel received them\n", obs.ICMPRcvTotal)
+		fmt.Println("Interpretation:")
+		fmt.Println("  PTBs are not being suppressed. The kernel can act on them for PMTUD.")
+		fmt.Println("  If large requests still fail, check that the application respects PTBs")
+		fmt.Println("  and that the overlay MTU is correctly configured.")
+
+	case diag.VerdictPTBSuppressed:
+		fmt.Println("Evidence:")
+		fmt.Printf("  PTBs at TC ingress (pre-netfilter): %d\n", obs.PTBIngressTotal)
+		fmt.Printf("  PTBs at icmp_rcv  (post-netfilter): %d  ← dropped before kernel\n", obs.ICMPRcvTotal)
+		fmt.Println("Recommendation:")
+		fmt.Println("  PTBs are being dropped between the NIC and icmp_rcv.")
+		fmt.Println("  Check:  iptables/nftables INPUT chain for ICMP type 3 code 4 DROP rules.")
+		fmt.Println("  Fix:    allow ICMP fragmentation-needed (type 3 code 4) through your firewall.")
+
+	case diag.VerdictMTUMisconfiguration:
+		fmt.Println("Evidence:")
+		if obs.OverlayMTU > 0 {
+			fmt.Printf("  overlay MTU:   %d B (current)\n", obs.OverlayMTU)
+		}
+		if obs.UnderlayMTU > 0 {
+			fmt.Printf("  underlay MTU:  %d B\n", obs.UnderlayMTU)
+			safe := obs.UnderlayMTU - diag.VXLANOverheadBytes
+			if obs.OverlayMTU > 0 && obs.OverlayMTU > safe {
+				fmt.Printf("  excess:        %d B (overlay exceeds safe value by this much)\n", obs.OverlayMTU-safe)
+			}
+		}
+		fmt.Println("Note:")
+		fmt.Println("  No active fragmentation or PTBs observed — this is a static risk.")
+		fmt.Println("  Traffic large enough to use the full overlay MTU will trigger fragmentation")
+		fmt.Println("  or a PTB, depending on the DF bit.")
+		if obs.UnderlayMTU > 0 {
+			fmt.Println("Recommendation:")
+			fmt.Printf("  set overlay MTU to %d B or lower\n", obs.UnderlayMTU-diag.VXLANOverheadBytes)
+		}
+
+	case diag.VerdictMTURisk:
+		fmt.Println("Evidence:")
+		fmt.Printf("  largest outer IP seen:  %d B\n", obs.MaxOuterIPLen)
+		if obs.UnderlayMTU > 0 {
+			fmt.Printf("  underlay MTU:           %d B (packet exceeded by %d B)\n",
+				obs.UnderlayMTU, obs.MaxOuterIPLen-obs.UnderlayMTU)
+		}
+		fmt.Println("Note:")
+		fmt.Println("  ip_do_fragment did not fire — packet may have been fragmented without")
+		fmt.Println("  triggering the kprobe during this window, or DF=0 allowed silent fragmentation.")
+		if obs.UnderlayMTU > 0 {
+			fmt.Println("Recommendation:")
+			fmt.Printf("  set overlay MTU to %d B or lower\n", obs.UnderlayMTU-diag.VXLANOverheadBytes)
+		}
+
+	default: // NO_ISSUE_OBSERVED
+		fmt.Println("Evidence:")
+		fmt.Println("  No PTBs, fragmentation events, or oversized traffic observed.")
+		fmt.Println("Note:")
+		fmt.Println("  This does not prove the path is healthy.")
+		fmt.Println("  Run with larger traffic and a longer --duration for higher confidence.")
+	}
+	fmt.Println()
 }
 
 // readVerdict opens the pinned maps written by the loader, builds a
