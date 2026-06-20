@@ -77,12 +77,46 @@ Interpretation:
 
 ## CI validation via x86-smoke.yml
 
-The restructured `human-output` CI job (added commit `10b40f6`) runs two scenarios
-and asserts `Verdict:` and `Evidence:` sections are present in stdout, then uploads
-`human-frag.log` and `human-ptb.log` as artifacts.
+CI run: **27857782449** ("x86_64 validation suite"), commit `0ef3385`, 2026-06-20T02:42Z.
+Workflow: x86-smoke.yml, job "Human-readable output validation".
+Runner: ubuntu-22.04, kernel 6.8.0-1059-azure, Ubuntu 22.04.5 LTS.
+Job conclusion reported by GitHub Actions: **success**.
 
-**Status at time of writing:** CI in progress (commit `10b40f6` push 2026-06-19).
-Artifact `human-output-logs-x86_64` will contain the actual captured output.
+**Actual validation result: FAIL for both verdicts.**
+
+The binary failed to load before producing any output:
+
+```
+error: attach failed: load tc ingress object bpf/tc_ingress_eth0.bpf.o:
+  new collection: map ptb_ingress_counts:
+  pin map to /sys/fs/bpf/ho-test/ptb_ingress_counts:
+  no such file or directory
+```
+
+The human-output CI job created the netns topology but did not mount or create
+`/sys/fs/bpf/ho-test/` before running the binary. The binary requires a bpffs
+pin directory to exist before attaching. As a result, the binary exited with an
+error and produced no human-readable output.
+
+Validation results:
+
+```
+[FAIL] missing Verdict:         (VXLAN_FRAGMENTATION_OBSERVED scenario)
+[FAIL] missing Evidence:        (VXLAN_FRAGMENTATION_OBSERVED scenario)
+[FAIL] no recognized verdict    (VXLAN_FRAGMENTATION_OBSERVED scenario)
+[FAIL] missing Verdict:         (PTB_SUPPRESSED scenario)
+[FAIL] no recognized verdict    (PTB_SUPPRESSED scenario)
+```
+
+The CI step used `echo "[FAIL] ..."` without `exit 1`, so GitHub Actions recorded
+the job conclusion as "success" despite the failures. This is a defect in the CI
+workflow step, not in the binary — the binary correctly enforces pin-dir existence.
+
+**Root cause:** missing `mkdir -p /sys/fs/bpf/ho-test` (or `setup-bpf-fs.sh` call)
+before the binary is invoked in the human-output CI job.
+
+Live printHuman output has **not** been captured via CI. Evidence remains based
+on code review only.
 
 ---
 

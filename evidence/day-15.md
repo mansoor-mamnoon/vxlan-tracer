@@ -20,47 +20,56 @@ All statements below reflect what was done on 2026-06-19. No results are fabrica
 | (this)  | docs: Day 15 synthesis | evidence/ + docs/ |
 
 All commits pushed to origin/main. CI triggered by push to bc37c9b..HEAD.
+Final commit on this chain: `0ef3385`.
 
 ---
 
 ## Gate status: PASS / FAIL / PENDING
 
+CI runs confirmed complete 2026-06-20:
+- Run **27857782449** ("x86_64 validation suite"), commit `0ef3385`, 2026-06-20T02:42Z
+- Run **27857782452** ("Release package amd64+arm64"), commit `0ef3385`, 2026-06-20T02:42Z
+
 | Gate | Status | Evidence |
 |------|--------|----------|
-| Latest CI run | PENDING | CI triggered 2026-06-19, run in progress |
-| Stale ELF integration test | PASS (prior) | Day 13 CI run 27851298262, x86_64 6.8.0-1059-azure |
-| Day 15 stale-object step | PENDING | bpf-scenario job artifact stale-bpf-test.log |
+| Latest CI run (x86-smoke) | PASS | Run 27857782449, all 3 jobs success |
+| Latest CI run (release-package) | PASS | Run 27857782452, all 3 jobs success |
+| Stale ELF integration test | PASS | Day 13 CI run 27851298262 + Day 15 run 27857782449 |
+| Day 15 stale-object step | PASS | 6/6, kernel 6.8.0-1059-azure (run 27857782449) |
 | Deterministic demo | PENDING | make demo requires Linux; not run Day 15 |
-| Live human output | PENDING | human-output CI job artifacts |
-| 6-scenario source-tree suite | PASS (prior) | Day 13 CI run 27851298262, 6/6 PASS |
-| Day 15 6-scenario step | PENDING | bpf-scenario job artifact scenario-results.log |
-| amd64 archive completeness | PENDING | release-package.yml build-amd64 job |
-| arm64 archive completeness | PENDING | release-package.yml build-arm64 job |
-| amd64 packaged smoke test | PENDING | No CI step yet for scenario-from-archive |
-| arm64 packaged smoke test | PENDING | ubuntu-22.04-arm runner availability unknown |
-| v0.1.0-rc1 version metadata | PENDING | package-rc1 requires Linux CI |
-| SHA-256 verification | PENDING | combine-checksums job |
+| Live human output | FAIL | human-output job: binary load error; Verdict:/Evidence: not captured |
+| 6-scenario source-tree suite | PASS | 6/6 PASS, kernel 6.8.0-1059-azure (run 27857782449) |
+| amd64 archive completeness | PASS | run 27857782452 build-amd64; verify-release-archive.sh PASS |
+| arm64 archive completeness | PASS | run 27857782452 build-arm64; ubuntu-22.04-arm runner confirmed |
+| amd64 packaged smoke test | PENDING | No CI step runs scenario-from-archive |
+| arm64 packaged smoke test | PENDING | No CI step runs scenario-from-archive on arm64 |
+| v0.1.0-rc1 version metadata | PENDING | packages built with VERSION=dev (not rc1) |
+| SHA-256 verification | PASS | sha256sum --check: both archives OK (run 27857782452) |
 
-**Currently proven:**
+**Proven in Day 15 (source-tree + CI):**
 - `go vet ./...` passes on macOS (all Day 14/15 code)
-- `go test ./...` passes on macOS (unit tests)
-- `make package` hard-fails on missing BPF objects (verified macOS)
-- `make package` correctly rejects non-Linux host (verified macOS, correct error + guidance)
-- `make package-rc1` delegates correctly (verified macOS, correct error)
-- verify-release-archive.sh written and exits with clear pass/fail
-- CI workflows written: release-package.yml (new), x86-smoke.yml (restructured)
+- `go test ./...`: 9 unit tests PASS, kernel 6.8.0-1059-azure (run 27857782449)
+- `make package` hard-fails on missing BPF objects (macOS verified)
+- `make package` correctly rejects non-Linux host (macOS verified)
+- `make package-rc1` delegates correctly (macOS verified)
+- verify-release-archive.sh: PASS on amd64 (run 27857782452)
+- verify-release-archive.sh: PASS on arm64 (run 27857782452)
+- amd64 archive: all required files present; sha256 `0aa54ee4...`
+- arm64 archive: all required files present; sha256 `fcac1b61...`; ubuntu-22.04-arm confirmed
+- sha256sum --check: both archives OK (run 27857782452)
+- Stale-object integration test: 6/6 PASS on 6.8.0-1059-azure (run 27857782449)
+- 6-scenario source-tree suite: 6/6 PASS on 6.8.0-1059-azure (run 27857782449)
+- `./vxlan-tracer --version`: `vxlan-tracer dev (commit 0ef3385, built unknown)` (both arches)
 - All 5 verdict paths covered in printHuman (code review)
 - No misleading MTU recommendation for PTB paths (code review)
-- MANIFEST.txt generated with correct fields (code review + macOS build test)
+- MANIFEST.txt in each archive (code review + CI log confirmation)
 
-**Not yet proven in Day 15 (requires CI/Linux):**
-- Architecture-correct BPF objects in release archives
-- verify-release-archive.sh PASS on amd64 archive
-- verify-release-archive.sh PASS on arm64 archive
-- `./vxlan-tracer --version` from extracted v0.1.0-rc1 package
-- Live human output (Verdict: + Evidence: sections) from actual binary run
-- `make demo` end-to-end (setup, traffic, verdict, cleanup)
-- Day 15 CI run conclusion
+**Not yet proven after Day 15 CI:**
+- `inject_ptb.py` absent from both archives — PTB scenarios cannot run from packaged files
+- `VERSION=v0.1.0-rc1` package not built — both archives show `dev` not `v0.1.0-rc1`
+- Live human output (Verdict: + Evidence:) not captured — human-output CI job failed load
+- `make demo` not run on Linux — pending
+- Scenario run from extracted archive on native arch — pending (packaged smoke test)
 
 ---
 
@@ -68,33 +77,34 @@ All commits pushed to origin/main. CI triggered by push to bc37c9b..HEAD.
 
 ### NOT READY FOR v0.1.0-rc1 TAG
 
-**Required gates not yet passed:**
+**Required gates not yet passed (updated after CI completion):**
 
-1. **amd64 archive completeness** — release-package.yml CI must confirm the archive
-   contains all 4 BPF objects compiled with `__TARGET_ARCH_x86`. CI in progress.
+1. **inject_ptb.py missing from archives** — `run-scenarios.sh` invokes
+   `spikes/inject_ptb.py` for PTB injection; `spikes/` is not packaged.
+   Scenarios 3 (PTB_DELIVERED) and 4 (PTB_SUPPRESSED) cannot run from the
+   extracted archive without falling back to the source tree.
 
-2. **arm64 archive completeness** — requires ubuntu-22.04-arm runner (availability
-   unconfirmed for this repository). If arm64 CI is unavailable, the arm64 archive
-   can be built on the Lima VM (aarch64) using `make package-rc1`.
+2. **Version metadata** — both archives contain `vxlan-tracer dev` not
+   `vxlan-tracer v0.1.0-rc1`. The `VERSION=v0.1.0-rc1 make package` step
+   must be run to produce correctly versioned archives.
 
-3. **Packaged binary smoke test** — neither archive has been extracted and used to
-   run even one scenario on the matching architecture. This is a hard requirement:
-   the packaged binary + packaged BPF objects must work together, not just the
-   source-tree binary with source-tree BPF objects.
+3. **Packaged binary smoke test** — neither archive has been extracted and used
+   to run even one scenario on the matching architecture.
 
-4. **Demo not run** — `make demo` has not completed on Linux in Day 15.
+4. **Demo not run** — `make demo` has not completed on Linux.
 
-5. **Human output not captured live** — the human-output CI job may produce evidence,
-   but that job runs on the same CI that is still in progress.
+5. **Human output not captured live** — the human-output CI job binary failed
+   to load (missing bpffs pin directory). `Verdict:` and `Evidence:` sections
+   not confirmed from an actual run.
 
 **What would change the decision to READY:**
 
-- CI run completes with all three x86-smoke.yml jobs PASS
-- release-package.yml build-amd64 job PASS (archive verified, --version confirmed)
-- release-package.yml build-arm64 job PASS or Lima VM package built and verified
+- inject_ptb.py moved to scripts/ and included in archives
+- `VERSION=v0.1.0-rc1 make package` run on both amd64 and arm64
 - At least one scenario run from the extracted amd64 archive on x86_64 Linux
 - At least one scenario run from the extracted arm64 archive on aarch64 Linux
 - `make demo` completed with `VXLAN_FRAGMENTATION_OBSERVED` verdict
+- printHuman output captured live with Verdict: and Evidence: sections
 
 Two-node Kubernetes validation remains out of scope for rc1 and must remain listed
 as unproven.
@@ -103,13 +113,15 @@ as unproven.
 
 ## Day 16 recommendation
 
-1. Check CI run results for commit 10b40f6 / 9dabe2b push
-2. If release-package.yml arm64 job fails (runner unavailable): build arm64 package
-   on Lima VM using `make package-rc1`, verify with `verify-release-archive.sh`
-3. Extract each archive and run at minimum: `--version`, `preflight.sh`, one scenario
-4. Update this file with CI run IDs and actual output
-5. If all gates pass: tag v0.1.0-rc1
-6. Run `make demo` on available Linux host and update evidence/day-15-demo.md
+1. Move `spikes/inject_ptb.py` → `scripts/inject_ptb.py`; update all references;
+   add to Makefile package target; add to verify-release-archive.sh
+2. Fix the human-output CI job: add `mkdir -p /sys/fs/bpf/ho-test` (or mount bpffs)
+   before running the binary
+3. Run `VERSION=v0.1.0-rc1 make package` on x86_64 and aarch64 Linux
+4. Extract each archive; run full scenario suite from packaged files only
+5. Run `make demo` on Linux; capture full output including `VXLAN_FRAGMENTATION_OBSERVED`
+6. Capture live printHuman output for at least 4 verdicts
+7. If all gates pass: tag v0.1.0-rc1
 
 ---
 

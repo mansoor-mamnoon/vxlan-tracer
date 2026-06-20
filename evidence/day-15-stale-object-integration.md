@@ -32,19 +32,16 @@ The `Stale BPF object integration test` step in that run completed without failu
 
 ---
 
-## Day 15 CI status
+## Day 15 CI result
 
-CI triggered by commit `10b40f6` (push 2026-06-19). The `bpf-scenario` job in the
-restructured x86-smoke.yml includes the stale-object test step. Log artifact:
-`scenario-logs-x86_64/stale-bpf-test.log`.
-
-**Status at time of writing this file:** CI in progress — artifact not yet available.
-This file will be updated with the actual CI run ID and log excerpt once the workflow
-completes.
+CI run: **27857782449** ("x86_64 validation suite"), commit `0ef3385`, 2026-06-20T02:42Z.
+Workflow: x86-smoke.yml, job "BPF compile + stale-object test + 6-scenario suite".
+Runner: ubuntu-22.04, kernel 6.8.0-1059-azure #65~22.04.1 x86_64, Ubuntu 22.04.5 LTS.
+Job conclusion: **success**.
 
 ---
 
-## Expected output (based on Day 13 CI and local script review)
+## Actual CI output (captured 2026-06-20)
 
 ```
 === Stale BPF object integration test ===
@@ -52,12 +49,19 @@ binary:  dist/vxlan-tracer
 fixture: tests/fixtures/tc_ingress_missing_config.bpf.c
 
 [1] Compiling stale fixture...
-  PASS  stale fixture compiled: /tmp/stale-bpf-test-<PID>/tc_ingress_eth0.bpf.o
+  PASS  stale fixture compiled: /tmp/stale-bpf-test-3234/tc_ingress_eth0.bpf.o
 [2] Creating test network namespace and veth pair...
   PASS  test namespace and veth pair ready (sl-test-a ↔ sl-test-b in sl-test-ns)
 [3] Running binary with stale TC ingress object...
   INFO  binary exit code: 2
-  INFO  binary output:    <stderr from binary>
+  INFO  binary output:    vxlan auto-detect: "sl-test-a" is type "veth", not vxlan — using default port 4789
+vxlan-tracer dev
+overlay:    sl-test-a
+underlay:   sl-test-b
+vxlan port: 4789 (auto-detected)
+pin dir:    /sys/fs/bpf
+bpf dir:    /tmp/stale-bpf-test-3234
+error: attach failed: write vxlan config map: vxlan_config map missing from tc_ingress object — likely stale BPF object; run: make clean-bpf && make bpf
 [4] Checking exit code...
   PASS  binary exited non-zero (2) as expected
 [5] Checking error message...
@@ -67,6 +71,7 @@ fixture: tests/fixtures/tc_ingress_missing_config.bpf.c
   PASS  no TC filters on sl-test-b ingress (loader rolled back correctly)
 
 === Results: 6 passed, 0 failed ===
+Exit: 0
 ```
 
 ---
@@ -76,11 +81,12 @@ fixture: tests/fixtures/tc_ingress_missing_config.bpf.c
 - Loader fails-closed when BPF object lacks `vxlan_config` map (Unit test: Day 13)
 - No TC filters left after stale-object failure (Unit test + integration, Day 13)
 - Script compiles fixture and runs binary with correct assertions (Day 13 CI)
-- amd64 (x86_64 6.8.0-1059-azure): PASS in Day 13 CI run 27851298262
+- amd64 (x86_64 6.8.0-1052-azure): PASS in Day 13 CI run 27851298262
+- amd64 (x86_64 6.8.0-1059-azure): PASS in Day 15 CI run 27857782449 — **6/6 PASS**
 
 ## What remains unproven
 
-- Day 15 CI run result for commit 10b40f6 (CI in progress at time of writing)
-- aarch64 run not performed in this CI session (Lima VM not available from macOS)
-- Pinned maps assertion: the script does not yet check for stale pinned maps
+- aarch64 stale-object run not performed in CI (ubuntu-22.04-arm runner does not
+  run the x86-smoke.yml jobs; would require a separate arm64 workflow step)
+- Pinned maps assertion: the script does not check for stale pinned maps
   under /sys/fs/bpf after failure (the binary errors before creating any maps)
