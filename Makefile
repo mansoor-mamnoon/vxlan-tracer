@@ -195,6 +195,15 @@ attach-bpf: bpf
 	@echo "Verify: ip netns exec ns1 tc filter show dev veth1 ingress"
 
 # --- Lab management ---
+# demo: run a self-contained VXLAN fragmentation detection demonstration.
+# Creates a stale-MTU lab (overlay MTU 1450, underlay MTU 1400), runs large
+# traffic, and shows the vxlan-tracer JSON output and human-readable summary.
+# Takes ~25 seconds. Requires Linux + root + compiled binary and BPF objects.
+demo: build
+	@if [ "$$(uname -s)" != "Linux" ]; then \
+	    echo "ERROR: demo requires Linux."; exit 1; fi
+	sudo BINARY=dist/$(BINARY) BPF_DIR=bpf bash scripts/demo.sh
+
 lab-up:
 	sudo bash scripts/setup-netns.sh
 
@@ -300,6 +309,7 @@ help:
 	@echo "  bpf-verify               Verify compiled objects contain vxlan_config map"
 	@echo "  clean-bpf                Remove compiled BPF objects (use before make bpf to force rebuild)"
 	@echo "  attach-bpf               Attach BPF to lab interfaces (Linux, lab must be up)"
+	@echo "  demo                     One-command VXLAN fragmentation demo (~25s, Linux+root)"
 	@echo "  lab-up        Create netns + VXLAN lab topology"
 	@echo "  lab-down      Tear down lab"
 	@echo "  smoke-small   Small traffic test"
