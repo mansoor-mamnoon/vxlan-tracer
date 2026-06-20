@@ -111,6 +111,19 @@ jobs:
           echo "=== Checksum ==="
           cat dist/release/checksums-amd64.sha256
 
+      - name: Verify packaged binary version
+        env:
+          VERSION: ${{ github.event.inputs.version || 'dev' }}
+        run: |
+          VERSION="${VERSION:-dev}"
+          TMPDIR=$(mktemp -d)
+          tar -xzf dist/release/vxlan-tracer-linux-amd64.tar.gz -C "$TMPDIR"
+          VER=$("$TMPDIR/vxlan-tracer-linux-amd64/vxlan-tracer" --version 2>&1)
+          echo "Packaged binary --version: $VER"
+          echo "$VER" | grep -q "vxlan-tracer" || { echo "ERROR: unexpected --version output"; exit 1; }
+          echo "$VER" | grep -q "$VERSION" || echo "NOTE: version string '$VERSION' not in output (expected if VERSION=dev)"
+          rm -rf "$TMPDIR"
+
       - name: Upload amd64 package
         uses: actions/upload-artifact@v4
         with:
@@ -188,6 +201,19 @@ jobs:
             "vxlan-tracer-linux-arm64/MANIFEST.txt" 2>/dev/null || echo "(not found)"
           echo "=== Checksum ==="
           cat dist/release/checksums-arm64.sha256
+
+      - name: Verify packaged binary version
+        env:
+          VERSION: ${{ github.event.inputs.version || 'dev' }}
+        run: |
+          VERSION="${VERSION:-dev}"
+          TMPDIR=$(mktemp -d)
+          tar -xzf dist/release/vxlan-tracer-linux-arm64.tar.gz -C "$TMPDIR"
+          VER=$("$TMPDIR/vxlan-tracer-linux-arm64/vxlan-tracer" --version 2>&1)
+          echo "Packaged binary --version: $VER"
+          echo "$VER" | grep -q "vxlan-tracer" || { echo "ERROR: unexpected --version output"; exit 1; }
+          echo "$VER" | grep -q "$VERSION" || echo "NOTE: version string '$VERSION' not in output (expected if VERSION=dev)"
+          rm -rf "$TMPDIR"
 
       - name: Upload arm64 package
         uses: actions/upload-artifact@v4

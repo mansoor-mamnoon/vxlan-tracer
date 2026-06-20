@@ -113,6 +113,33 @@ if [[ -f "$PKG/MANIFEST.txt" ]]; then
 fi
 
 echo ""
+echo "-- Binary version check --"
+if [[ -f "$PKG/vxlan-tracer" && -x "$PKG/vxlan-tracer" ]]; then
+    # Attempt to run --version only when the binary arch matches the host.
+    # ELF machine field: 0x3e = x86-64, 0xb7 = AArch64 (ARM64).
+    _HOST_MACHINE=$(uname -m 2>/dev/null || echo unknown)
+    _ELF_OK=0
+    if command -v file &>/dev/null; then
+        FILETYPE=$(file "$PKG/vxlan-tracer" 2>/dev/null)
+        if (echo "$FILETYPE" | grep -qi "x86-64") && [ "$_HOST_MACHINE" = "x86_64" ]; then
+            _ELF_OK=1
+        elif (echo "$FILETYPE" | grep -qi "aarch64\|arm64\|ARM aarch64") && [ "$_HOST_MACHINE" = "aarch64" ]; then
+            _ELF_OK=1
+        fi
+    fi
+    if [[ $_ELF_OK -eq 1 ]]; then
+        _VER=$("$PKG/vxlan-tracer" --version 2>&1 || echo "FAILED")
+        if echo "$_VER" | grep -q "vxlan-tracer"; then
+            _pass "binary --version: $_VER"
+        else
+            _fail "binary --version returned unexpected output: $_VER"
+        fi
+    else
+        _info "skipping binary execution (host arch=$_HOST_MACHINE does not match binary arch or file(1) unavailable)"
+    fi
+fi
+
+echo ""
 echo "=== Verification summary ==="
 echo "  PASS: $PASS"
 echo "  FAIL: $FAIL"
