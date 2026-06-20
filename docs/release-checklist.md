@@ -14,54 +14,78 @@ All items must be individually verified and recorded in `evidence/`.
 
 ## Go build and tests
 
-- [x] `go vet ./...` passes with no warnings (macOS; Day 14)
-- [ ] `go test ./...` passes on Linux (all packages including `internal/loader`)
-- [ ] `make build` produces a valid ELF binary (`file dist/vxlan-tracer` shows ELF x86-64 or ARM64)
-- [x] Binary links correctly — `make build` produces binary with commit hash via -ldflags (Day 14)
+- [x] `go vet ./...` passes with no warnings (macOS; Day 14/15)
+- [ ] `go test ./...` passes on Linux (all packages; bpf-scenario CI job pending Day 15)
+- [ ] `make build` produces a valid ELF binary
+- [x] Binary links correctly with commit hash via -ldflags (Day 14)
 - [x] `--version` prints version, commit, and buildDate fields (Day 14)
 
-## Scenario suite (local)
+## Scenario suite
 
-- [ ] 6/6 scenarios pass on at least one aarch64 kernel (Lima VM or Docker Desktop)
-- [ ] 6/6 scenarios pass on at least one x86_64 kernel (GitHub Actions or x86_64 VM)
-- [ ] Scenario 6 (port 8472) passes: `vxlan_port=8472` confirmed in JSON output
-- [ ] `scripts/preflight.sh` passes with 0 FAIL (ENVIRONMENT failures on CI are acceptable)
+- [x] 6/6 scenarios pass on aarch64 5.15.0-181-generic (Day 12-13, Lima VM)
+- [x] 6/6 scenarios pass on x86_64 6.8.0-1059-azure (Day 13, GitHub Actions run 27851298262)
+- [x] Scenario 6 (port 8472): `vxlan_port=8472` confirmed in JSON on both archs (Day 12-13)
+- [ ] `scripts/preflight.sh` passes with 0 FAIL on Day 15 CI run (pending)
 
 ## CI
 
-- [ ] `x86_64 scenario probe` workflow shows job conclusion PASS on a recent push to main
-- [ ] BPF compile and `bpf-verify` steps pass in CI
-- [ ] Go unit tests pass in CI
-- [ ] Scenario runner output shows "Results: 6 passed, 0 failed" in CI log
+- [x] `x86_64 validation suite` (restructured): unit-build + bpf-scenario jobs (Day 15 commit 10b40f6, pending)
+- [ ] Day 15 CI run conclusion confirmed PASS (CI triggered 2026-06-19, pending)
+- [x] BPF compile and `bpf-verify` steps confirmed PASS in prior Day 13 CI
+- [x] Go unit tests confirmed PASS in prior Day 13 CI
+- [x] Scenario runner: "Results: 6 passed, 0 failed" in Day 13 CI log
 
 ## Release package
 
-- [x] `make package` produces vxlan-tracer-linux-amd64.tar.gz and vxlan-tracer-linux-arm64.tar.gz (Day 14)
-- [x] `dist/release/checksums.sha256` produced alongside tarballs (Day 14)
-- [x] Each tarball contains: binary, scripts/, README.md, LICENSE (verified via tar -tzf) (Day 14)
+- [x] `make package` hard-fails on missing BPF objects with clear error message (Day 15)
+- [x] `make package` requires Linux and correctly rejects macOS (Day 15, verified)
+- [x] Each archive includes MANIFEST.txt with version, commit, arch, BPF target, limitations (Day 15)
+- [x] `scripts/verify-release-archive.sh` validates binary, 4 BPF objects, scripts, README, LICENSE, MANIFEST.txt (Day 15)
+- [x] `package-rc1` convenience target added (Day 15)
+- [ ] `VERSION=v0.1.0-rc1 make package` run on x86_64 Linux (CI in progress Day 15)
+- [ ] `VERSION=v0.1.0-rc1 make package` run on aarch64 Linux (CI in progress Day 15)
+- [x] `dist/release/checksums-<arch>.sha256` produced per-arch (Day 15)
+- [ ] Both archives pass `verify-release-archive.sh` on native arch (CI in progress Day 15)
 - [x] LICENSE file present (MIT, Copyright 2026 Mansoor Mamnoon) (Day 14)
 
-## README and documentation accuracy
+## Human-readable output
+
+- [x] `printHuman` added for all 5 verdicts (Day 14)
+- [x] No misleading MTU recommendation for PTB paths (code review Day 14/15)
+- [ ] Live human output captured for VXLAN_FRAGMENTATION_OBSERVED (CI in progress Day 15)
+- [ ] Live human output captured for PTB_SUPPRESSED (CI in progress Day 15)
+
+## Demo
+
+- [x] `scripts/demo.sh` written; `make demo` target added (Day 14)
+- [ ] `make demo` run end-to-end on Linux with VXLAN_FRAGMENTATION_OBSERVED result (not yet)
+
+## Stale BPF object integration
+
+- [x] `scripts/test-stale-bpf-object.sh` confirms 6/6 assertions PASS on x86_64 (Day 13 CI run 27851298262)
+- [ ] Day 15 CI `bpf-scenario` job stale-object step confirmed (CI in progress)
+
+## README and documentation
 
 - [x] Status line accurately describes what is and is not proven (Day 14)
-- [x] Port claim says "validated in netns lab on ports 4789 and 8472" (not "CNI validated") (Day 14)
-- [ ] Kernel matrix reflects actual runs with kernel version and scenario count
-- [x] CNI table is labeled as documentation-based (not lab-validated)
-- [x] No references to `VXLAN_HEALTHY` (not a real verdict; use `NO_ISSUE_OBSERVED`)
+- [x] Port claim: "validated in netns lab on ports 4789 and 8472" (not "CNI validated")
+- [x] Kernel matrix reflects actual runs with version and scenario count (Day 14)
+- [x] CNI table is labeled documentation-based (not lab-validated)
+- [x] No references to `VXLAN_HEALTHY`
 
 ## Forbidden claims review
 
-- [ ] `docs/forbidden-claims.md` reviewed; no claim in README, release notes, or commit messages violates it
-- [ ] No claim of "k3s validated", "flannel validated", or "CNI validated"
-- [ ] No claim of XDP egress
-- [ ] No claim that ip_do_fragment is VXLAN-specific
-- [ ] No claim of packet loss from fragmentation events alone
+- [x] docs/forbidden-claims.md reviewed; no violations in Day 14/15 commits
+- [x] No "k3s validated", "flannel validated", or "CNI validated" claim
+- [x] No XDP egress claim
+- [x] No claim that ip_do_fragment is VXLAN-specific
+- [x] No claim of packet loss from fragmentation events alone
 
 ## CNI status
 
-- [ ] README accurately states: "k3s/flannel CNI validation requires a real two-node cluster and is not yet complete"
-- [ ] `docs/kubernetes-validation.md` checklist is up to date with any completed items
-- [ ] No claim of cross-node pod traffic without two-node lab evidence
+- [x] README states: "Two-node k3s/flannel validation not complete" (Day 14)
+- [x] docs/kubernetes-validation.md: two-node requirement documented
+- [x] No cross-node pod traffic claim
 
 ---
 
@@ -71,3 +95,4 @@ After tagging, record in `evidence/`:
 - Kernel(s) tested at release time
 - Scenario results at release time
 - `git log --oneline -10` at the release tag
+- SHA-256 checksums of tagged archives
