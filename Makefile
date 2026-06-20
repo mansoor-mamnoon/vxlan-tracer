@@ -49,8 +49,8 @@ CFLAGS_BPF_KPROBE := $(CFLAGS_BPF) $(_TARGET_ARCH_DEFINE)
 PREFIX ?= /usr/local
 
 .PHONY: all build build-linux-arm64 build-linux-amd64 package install uninstall \
-        bpf bpf-check bpf-verify generate lint vet test preflight \
-        lab-up lab-down smoke-small smoke-large scenarios cleanup-bpf \
+        bpf bpf-check bpf-verify generate lint vet test test-stale-bpf preflight \
+        lab-up lab-down smoke-small smoke-large demo scenarios cleanup-bpf \
         attach-bpf check-symbols clean clean-bpf help
 
 all: build
@@ -87,6 +87,15 @@ package: build-linux-arm64 build-linux-amd64
 
 test:
 	go test ./...
+
+# test-stale-bpf: integration test that verifies the loader fails closed when given a
+# stale BPF object (compiled without vxlan_config).  Requires Linux + root + clang.
+# Uses tests/fixtures/tc_ingress_missing_config.bpf.c as the stale fixture.
+# Exit 77 means skipped (environment restriction); exit 1 means assertion failure.
+test-stale-bpf: build
+	@if [ "$$(uname -s)" != "Linux" ]; then \
+	    echo "SKIP: test-stale-bpf requires Linux."; exit 0; fi
+	sudo BINARY=dist/$(BINARY) bash scripts/test-stale-bpf-object.sh
 
 # preflight: check runtime requirements before attempting BPF load or lab setup.
 # Requires Linux + root. Checks OS, kernel, BTF, bpffs, required commands, libbpf headers,
@@ -283,6 +292,7 @@ help:
 	@echo "  install [PREFIX=...]     Install binary to PREFIX/bin (Linux only, default /usr/local)"
 	@echo "  uninstall [PREFIX=...]   Remove installed binary"
 	@echo "  test                     go test ./..."
+	@echo "  test-stale-bpf           Integration test: stale BPF object causes clear error (Linux+root)"
 	@echo "  preflight                Check all runtime requirements (Linux + root)"
 	@echo "  vet                      go vet"
 	@echo "  bpf                      Compile BPF objects (Linux only)"

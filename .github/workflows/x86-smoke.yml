@@ -103,6 +103,13 @@ jobs:
         run: |
           make test
 
+      - name: Stale BPF object integration test
+        run: |
+          echo "=== Stale BPF object integration test ==="
+          sudo BINARY=dist/vxlan-tracer \
+            bash scripts/test-stale-bpf-object.sh
+        continue-on-error: false
+
       - name: Run 6-scenario suite (includes port 8472)
         run: |
           echo "=== Running 6-scenario suite on $(uname -r) x86_64 ==="
