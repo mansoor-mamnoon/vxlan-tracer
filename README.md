@@ -2,13 +2,38 @@
 
 An eBPF-based diagnostic tool for VXLAN MTU blackholes.
 
-**Status: cross-architecture v0 prototype — validated in netns lab on four Linux kernels
-across two architectures. All six scenario variants pass on both aarch64 (5.15.0-181-generic)
-and x86_64 (6.8.0-1059-azure), including port-8472 (k3s/Flannel default). VXLAN UDP port
-is runtime-configurable (--vxlan-port, default: auto-detect via rtnetlink); ports 4789 and
-8472 validated in netns lab. PT_REGS_PARM1 confirmed for both architectures. ip_do_fragment
-scoping limitation documented. k3s/flannel CNI validation requires a real two-node cluster
-and is not yet complete.**
+**Symptom:** small requests work (ping, tiny HTTP), but large requests silently stall
+or fragment (file transfers, kubectl cp, large API payloads). No error is logged.
+
+**Status:** lab-validated prototype — 6/6 scenario variants pass on aarch64
+(5.15.0-181-generic) and x86_64 (6.8.0-1059-azure); ports 4789 and 8472 confirmed.
+Not tested against a real k3s/flannel cluster; lab-only veth topology.
+
+---
+
+## Quick demo (Linux + root + compiled binary + BPF objects)
+
+```sh
+make bpf          # compile BPF objects (Linux only)
+make demo         # ~25 s self-contained stale-MTU lab demo
+```
+
+Expected output:
+
+```
+Verdict:  VXLAN_FRAGMENTATION_OBSERVED
+Evidence:
+  ip_do_fragment events:   6
+  largest outer IP seen:   1438 B
+  underlay MTU:            1400 B  (outer packet exceeded by 38 B)
+Recommendation:
+  set overlay MTU to 1350 B or lower
+  (VXLAN overhead is 50 B; safe overlay MTU = underlay MTU − 50)
+Scope:
+  global fragmentation counter corroborated by VXLAN TC egress
+  (both ip_do_fragment and oversized outer packets observed)
+  See docs/fragmentation-scoping.md for limitations.
+```
 
 ---
 
@@ -81,20 +106,38 @@ Short version:
 
 This tool runs on **Linux only**. It cannot run on macOS or Windows.
 
-## Usage (target)
+## Build and install
 
 ```sh
-# requires root / CAP_BPF + CAP_NET_ADMIN
+# Build native binary (any platform; BPF objects compiled separately on Linux)
+make build
+
+# Cross-compile Linux binaries + per-arch release tarballs with checksums
+make package                       # VERSION=dev (untagged)
+VERSION=v0.1.0 make package        # embed a release version tag
+
+# Install to /usr/local/bin (Linux only)
+sudo make install
+
+# Check version
+dist/vxlan-tracer --version
+# vxlan-tracer v0.1.0 (commit abc1234, built unknown)
+```
+
+## Usage
+
+```sh
+# Requires root / CAP_BPF + CAP_NET_ADMIN
 sudo vxlan-tracer --overlay vxlan0 --underlay eth0
 
-# VXLAN port auto-detected from the overlay interface (default behaviour)
-# For k3s/Flannel (port 8472): auto-detect picks it up from flannel.1
+# VXLAN port auto-detected from overlay interface (default)
+# For k3s/Flannel (port 8472): rtnetlink reads it from flannel.1
 sudo vxlan-tracer --overlay flannel.1 --underlay eth0 --duration 30s
 
-# Explicit port override (e.g. if the interface is not a real VXLAN device)
+# Explicit port override (e.g. non-VXLAN interface in a test lab)
 sudo vxlan-tracer --overlay vxlan0 --underlay eth0 --vxlan-port 4789
 
-# JSON output for structured parsing
+# JSON output for structured parsing or further processing
 sudo vxlan-tracer --overlay vxlan0 --underlay eth0 --json
 ```
 
@@ -112,7 +155,10 @@ sudo vxlan-tracer --overlay vxlan0 --underlay eth0 --json
 | Go controller (attach + pin + read) | done — `internal/loader`, `internal/bpfmap` |
 | Diagnosis engine | done — `internal/diag/verdict.go`, 5-verdict precedence logic |
 | Structured (JSON) output | done — `--json` flag; proven for frag and PTB paths (Day 6) |
-| CI test suite | not started |
+| Human-readable output | done — labelled sections per verdict (Verdict/Evidence/Recommendation/Scope) |
+| Demo script | done — `make demo` runs a ~25 s stale-MTU lab end-to-end |
+| Stale BPF integration test | done — `make test-stale-bpf`; CI step in x86-smoke.yml |
+| CI test suite | done — x86-smoke.yml + arm-smoke.yml on GitHub Actions |
 
 All five verdicts (PTB_DELIVERED, PTB_SUPPRESSED, VXLAN_FRAGMENTATION_OBSERVED,
 VXLAN_MTU_MISCONFIGURATION, NO_ISSUE_OBSERVED) are reachable through the actual
