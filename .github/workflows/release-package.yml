@@ -286,13 +286,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: vxlan-tracer-linux-amd64
-          path: dist/release/
+          path: .
 
       - name: Download arm64 checksums
         uses: actions/download-artifact@v4
         with:
           name: vxlan-tracer-linux-arm64
-          path: dist/release/
+          path: .
 
       - name: Combine and verify checksums
         run: |
