@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-spikes/inject_ptb.py
-
-SPIKE — not production code.
+scripts/inject_ptb.py
 
 Inject a synthetic ICMP Packet Too Big (type=3 code=4) message into a network
 namespace to test the PTB suppression detection path.
@@ -21,7 +19,7 @@ Flannel deployments that use the non-IANA default port.
 
 Usage:
     # From ns2, inject PTB toward ns1's underlay address
-    ip netns exec ns2 python3 spikes/inject_ptb.py \\
+    ip netns exec ns2 python3 scripts/inject_ptb.py \\
         --src 192.168.100.2 \\
         --dst 192.168.100.1 \\
         --dev veth2 \\
@@ -29,7 +27,7 @@ Usage:
         --count 5
 
     # Non-4789 VXLAN port (e.g. Flannel legacy port 8472):
-    ip netns exec ns2 python3 spikes/inject_ptb.py \\
+    ip netns exec ns2 python3 scripts/inject_ptb.py \\
         --src 192.168.100.2 \\
         --dst 192.168.100.1 \\
         --dev veth2 \\

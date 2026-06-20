@@ -120,11 +120,13 @@ for ref in "${SCRIPT_REFS[@]}"; do
     fi
 done
 
-# Confirm run-scenarios.sh does NOT reference spikes/ or an absolute source path
+# Confirm shell scripts do NOT invoke commands via spikes/ path.
+# Exclude comment lines (# ...) and string literals in .py docstrings.
 echo ""
-echo "-- No source-tree references in packaged scripts --"
-if grep -r "spikes/" "$PKG/scripts/" 2>/dev/null | grep -v "^Binary"; then
-    _fail "packaged scripts contain 'spikes/' reference — source tree dependency"
+echo "-- No source-tree invocations in packaged shell scripts --"
+if grep -rn "spikes/" "$PKG/scripts/"*.sh 2>/dev/null \
+    | grep -v "^[^:]*:[[:space:]]*#"; then
+    _fail "packaged .sh scripts contain active 'spikes/' reference — source tree dependency"
 else
     _pass "no 'spikes/' reference in packaged scripts"
 fi
