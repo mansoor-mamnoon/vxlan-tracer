@@ -61,7 +61,7 @@ All commits pushed to origin/main.
 | combine-checksums: all three jobs PASS | PASS | CI 27862917754: build-amd64 ✓ build-arm64 ✓ combine-checksums ✓ |
 | Historical matrix corrected (linuxkit 5/5) | PASS | commit 65c043f |
 | Demo scenario number corrected (→ Scenario 2) | PASS | commit 65c043f |
-| VERSION=v0.1.0-rc1 in --version output | NOT DONE | requires workflow_dispatch version=v0.1.0-rc1 |
+| VERSION=v0.1.0-rc1 in --version output | PASS | CI 27863179327 (workflow_dispatch version=v0.1.0-rc1): both arches produce vxlan-tracer v0.1.0-rc1 (commit 74cf2d7) |
 | Demo: VXLAN_FRAGMENTATION_OBSERVED live | NOT DONE | requires Linux + make demo |
 | Demo: global_corroborated live | NOT DONE | requires Linux + make demo |
 | Demo: cleanup verified (no stale maps/filters) | NOT DONE | requires Linux + make demo |
@@ -79,12 +79,12 @@ VXLAN_FRAGMENTATION_OBSERVED and PTB_SUPPRESSED.
 
 **Remaining gates before tag:**
 
-1. **VERSION=v0.1.0-rc1 not used** — current CI uses VERSION=dev. The release
-   workflow supports `workflow_dispatch` with a `version` input; this must be
-   triggered manually with `version=v0.1.0-rc1` to produce correctly versioned archives.
-
-2. **Demo not run** — `make demo` has not been run on Linux. Scenario 2
+1. **Demo not run** — `make demo` has not been run on Linux. Scenario 2
    (VXLAN_FRAGMENTATION_OBSERVED with global_corroborated) must complete live.
+
+VERSION=v0.1.0-rc1 is now confirmed: both amd64 and arm64 archives from CI 27863179327
+(workflow_dispatch) report `vxlan-tracer v0.1.0-rc1 (commit 74cf2d7)`. All other gates
+PASS. Only the live demo remains.
 
 ---
 
