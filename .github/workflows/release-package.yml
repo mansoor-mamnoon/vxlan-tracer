@@ -149,15 +149,23 @@ jobs:
             || { echo "ERROR: scenario suite did not report 6 passed, 0 failed"; exit 1; }
           rm -rf "$PKGDIR"
 
-      - name: Upload amd64 package and logs
+      - name: Upload amd64 package
         uses: actions/upload-artifact@v4
         with:
           name: vxlan-tracer-linux-amd64
           path: |
             dist/release/vxlan-tracer-linux-amd64.tar.gz
             dist/release/checksums-amd64.sha256
-            /tmp/pkg-scenario-amd64.log
           retention-days: 14
+
+      - name: Upload amd64 scenario log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-log-amd64
+          path: /tmp/pkg-scenario-amd64.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   build-arm64:
     name: Build arm64 package
@@ -266,15 +274,23 @@ jobs:
             || { echo "ERROR: scenario suite did not report 6 passed, 0 failed"; exit 1; }
           rm -rf "$PKGDIR"
 
-      - name: Upload arm64 package and logs
+      - name: Upload arm64 package
         uses: actions/upload-artifact@v4
         with:
           name: vxlan-tracer-linux-arm64
           path: |
             dist/release/vxlan-tracer-linux-arm64.tar.gz
             dist/release/checksums-arm64.sha256
-            /tmp/pkg-scenario-arm64.log
           retention-days: 14
+
+      - name: Upload arm64 scenario log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-log-arm64
+          path: /tmp/pkg-scenario-arm64.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   combine-checksums:
     name: Combine checksums
@@ -286,13 +302,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: vxlan-tracer-linux-amd64
-          path: .
+          path: dist/release/
 
       - name: Download arm64 checksums
         uses: actions/download-artifact@v4
         with:
           name: vxlan-tracer-linux-arm64
-          path: .
+          path: dist/release/
 
       - name: Combine and verify checksums
         run: |
