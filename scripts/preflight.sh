@@ -98,9 +98,15 @@ else
     _fail "PRIVILEGE" "ip netns add failed — requires root"
 fi
 
-# Probe: can we create a dummy interface?
+# Probe: can we add a clsact qdisc to a global-namespace dummy interface?
+# This probe uses a temporary dummy interface in the default network namespace.
+# vxlan-tracer itself creates clsact qdiscs on veth interfaces INSIDE network
+# namespaces (see setup-netns.sh), so a failure here does not prevent scenarios
+# from running.  GitHub-hosted ubuntu-22.04 runners block ip link add dummy in
+# the global namespace even as root — this is an environment restriction, not a
+# vxlan-tracer requirement.  Demoted to WARN.
 echo ""
-echo "-- clsact qdisc capability probe --"
+echo "-- clsact qdisc capability probe (global netns; informational only) --"
 _DUMMY="preflight-veth-$$"
 if ip link add "$_DUMMY" type dummy 2>/dev/null; then
     if ip link set dev "$_DUMMY" up 2>/dev/null && \
@@ -111,7 +117,8 @@ if ip link add "$_DUMMY" type dummy 2>/dev/null; then
     fi
     ip link del "$_DUMMY" 2>/dev/null || true
 elif [[ $EUID -eq 0 ]]; then
-    _fail "ENVIRONMENT" "ip link add dummy failed even as root — may be a restricted container/runner"
+    _warn "ip link add dummy restricted in this environment (shared runner or unprivileged container)"
+    _info "  vxlan-tracer uses veth interfaces inside netns — this probe is not a hard requirement"
 else
     _fail "PRIVILEGE" "ip link add dummy failed — requires root"
 fi
