@@ -220,6 +220,8 @@ jobs:
           sudo ip netns exec ho-ns1 ip neigh add 10.244.77.2 lladdr de:ad:00:00:00:02 dev vxlan0
           # Reduce underlay MTU to 1400 (overlay stays at default ~1450)
           sudo ip netns exec ho-ns1 ip link set ho-veth1 mtu 1400
+          # Create bpffs pin directory (binary requires this to exist before attaching)
+          sudo mkdir -p /sys/fs/bpf/ho-test
           # Run binary and capture human output
           sudo nsenter --net=/var/run/netns/ho-ns1 -- dist/vxlan-tracer \
             --overlay vxlan0 --underlay ho-veth1 \
@@ -233,15 +235,16 @@ jobs:
           wait $_PID 2>/dev/null || true
           echo "=== Human output ===" | tee -a /tmp/human-frag.log
           cat /tmp/human-frag.log
-          # Assertions
-          grep -q "Verdict:" /tmp/human-frag.log && echo "[PASS] contains Verdict:" || echo "[FAIL] missing Verdict:"
-          grep -q "Evidence:" /tmp/human-frag.log && echo "[PASS] contains Evidence:" || echo "[FAIL] missing Evidence:"
+          # Assertions — exit 1 on any failure
+          _FAIL=0
+          grep -q "Verdict:"  /tmp/human-frag.log && echo "[PASS] contains Verdict:"  || { echo "[FAIL] missing Verdict:";  _FAIL=1; }
+          grep -q "Evidence:" /tmp/human-frag.log && echo "[PASS] contains Evidence:" || { echo "[FAIL] missing Evidence:"; _FAIL=1; }
           grep -qE "VXLAN_FRAGMENTATION_OBSERVED|NO_ISSUE_OBSERVED|VXLAN_MTU_MISCONFIGURATION" /tmp/human-frag.log \
-            && echo "[PASS] verdict present" || echo "[FAIL] no recognized verdict"
+            && echo "[PASS] verdict present" || { echo "[FAIL] no recognized verdict"; _FAIL=1; }
           # Cleanup
           sudo ip netns del ho-ns1 2>/dev/null || true
           sudo rm -rf /sys/fs/bpf/ho-test 2>/dev/null || true
-        continue-on-error: true
+          [ "$_FAIL" = "0" ] || exit 1
 
       - name: Validate human output — PTB_SUPPRESSED
         run: |
@@ -256,6 +259,8 @@ jobs:
           sudo ip netns exec ho-ptb-ns ip link set ho-ptb-v2 up
           sudo ip netns exec ho-ptb-ns ip link set lo up
           sudo ip netns exec ho-ptb-ns iptables -I INPUT -p icmp --icmp-type 3/4 -j DROP
+          # Create bpffs pin directory (binary requires this to exist before attaching)
+          sudo mkdir -p /sys/fs/bpf/ho-ptb-test
           # Run binary for 8s and inject PTBs during window
           sudo nsenter --net=/var/run/netns/ho-ptb-ns -- dist/vxlan-tracer \
             --overlay ho-ptb-v1 --underlay ho-ptb-v2 \
@@ -270,13 +275,14 @@ jobs:
           wait $_PID 2>/dev/null || true
           echo "=== Human output ===" | tee -a /tmp/human-ptb.log
           cat /tmp/human-ptb.log
-          grep -q "Verdict:" /tmp/human-ptb.log && echo "[PASS] contains Verdict:" || echo "[FAIL] missing Verdict:"
+          _FAIL=0
+          grep -q "Verdict:" /tmp/human-ptb.log && echo "[PASS] contains Verdict:" || { echo "[FAIL] missing Verdict:"; _FAIL=1; }
           grep -qE "PTB_SUPPRESSED|PTB_DELIVERED|NO_ISSUE_OBSERVED" /tmp/human-ptb.log \
-            && echo "[PASS] verdict present" || echo "[FAIL] no recognized verdict"
+            && echo "[PASS] verdict present" || { echo "[FAIL] no recognized verdict"; _FAIL=1; }
           # Cleanup
           sudo ip netns del ho-ptb-ns 2>/dev/null || true
           sudo rm -rf /sys/fs/bpf/ho-ptb-test 2>/dev/null || true
-        continue-on-error: true
+          [ "$_FAIL" = "0" ] || exit 1
 
       - name: Upload human output logs
         if: always()

@@ -68,7 +68,7 @@ jobs:
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
             clang llvm libbpf-dev linux-tools-generic linux-tools-$(uname -r) \
-            iproute2 make gcc build-essential gcc-multilib
+            iproute2 make gcc build-essential gcc-multilib python3-pip
           clang --version | head -1
           go version
 
@@ -124,13 +124,39 @@ jobs:
           echo "$VER" | grep -q "$VERSION" || echo "NOTE: version string '$VERSION' not in output (expected if VERSION=dev)"
           rm -rf "$TMPDIR"
 
-      - name: Upload amd64 package
+      - name: Package isolation test
+        run: |
+          bash scripts/test-release-package-isolation.sh \
+            dist/release/vxlan-tracer-linux-amd64.tar.gz
+
+      - name: Install scapy for scenario run
+        run: sudo pip install -q scapy
+
+      - name: Run 6-scenario suite from packaged archive
+        run: |
+          PKGDIR=$(mktemp -d)
+          tar -xzf dist/release/vxlan-tracer-linux-amd64.tar.gz -C "$PKGDIR"
+          PKG="$PKGDIR/vxlan-tracer-linux-amd64"
+          echo "=== Package isolation: running scenarios from $PKG (no source tree) ==="
+          echo "binary: $PKG/vxlan-tracer"
+          echo "bpf:    $PKG/bpf"
+          ls -la "$PKG/scripts/"
+          sudo mkdir -p /sys/fs/bpf/vxlan-tracer
+          sudo BINARY="$PKG/vxlan-tracer" BPF_DIR="$PKG/bpf" DURATION=15s \
+            bash "$PKG/scripts/run-scenarios.sh" 2>&1 | tee /tmp/pkg-scenario-amd64.log
+          grep -E "Results:|PASS|FAIL" /tmp/pkg-scenario-amd64.log | tail -5
+          grep -q "Results: 6 passed, 0 failed" /tmp/pkg-scenario-amd64.log \
+            || { echo "ERROR: scenario suite did not report 6 passed, 0 failed"; exit 1; }
+          rm -rf "$PKGDIR"
+
+      - name: Upload amd64 package and logs
         uses: actions/upload-artifact@v4
         with:
           name: vxlan-tracer-linux-amd64
           path: |
             dist/release/vxlan-tracer-linux-amd64.tar.gz
             dist/release/checksums-amd64.sha256
+            /tmp/pkg-scenario-amd64.log
           retention-days: 14
 
   build-arm64:
@@ -159,7 +185,7 @@ jobs:
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
             clang llvm libbpf-dev linux-tools-generic linux-tools-$(uname -r) \
-            iproute2 make gcc build-essential
+            iproute2 make gcc build-essential python3-pip
           clang --version | head -1
           go version
 
@@ -215,13 +241,39 @@ jobs:
           echo "$VER" | grep -q "$VERSION" || echo "NOTE: version string '$VERSION' not in output (expected if VERSION=dev)"
           rm -rf "$TMPDIR"
 
-      - name: Upload arm64 package
+      - name: Package isolation test
+        run: |
+          bash scripts/test-release-package-isolation.sh \
+            dist/release/vxlan-tracer-linux-arm64.tar.gz
+
+      - name: Install scapy for scenario run
+        run: sudo pip install -q scapy
+
+      - name: Run 6-scenario suite from packaged archive
+        run: |
+          PKGDIR=$(mktemp -d)
+          tar -xzf dist/release/vxlan-tracer-linux-arm64.tar.gz -C "$PKGDIR"
+          PKG="$PKGDIR/vxlan-tracer-linux-arm64"
+          echo "=== Package isolation: running scenarios from $PKG (no source tree) ==="
+          echo "binary: $PKG/vxlan-tracer"
+          echo "bpf:    $PKG/bpf"
+          ls -la "$PKG/scripts/"
+          sudo mkdir -p /sys/fs/bpf/vxlan-tracer
+          sudo BINARY="$PKG/vxlan-tracer" BPF_DIR="$PKG/bpf" DURATION=15s \
+            bash "$PKG/scripts/run-scenarios.sh" 2>&1 | tee /tmp/pkg-scenario-arm64.log
+          grep -E "Results:|PASS|FAIL" /tmp/pkg-scenario-arm64.log | tail -5
+          grep -q "Results: 6 passed, 0 failed" /tmp/pkg-scenario-arm64.log \
+            || { echo "ERROR: scenario suite did not report 6 passed, 0 failed"; exit 1; }
+          rm -rf "$PKGDIR"
+
+      - name: Upload arm64 package and logs
         uses: actions/upload-artifact@v4
         with:
           name: vxlan-tracer-linux-arm64
           path: |
             dist/release/vxlan-tracer-linux-arm64.tar.gz
             dist/release/checksums-arm64.sha256
+            /tmp/pkg-scenario-arm64.log
           retention-days: 14
 
   combine-checksums:
