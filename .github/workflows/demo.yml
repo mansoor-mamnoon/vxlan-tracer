@@ -1,0 +1,206 @@
+# demo.yml — Live demo of vxlan-tracer from packaged rc1 archive
+#
+# This workflow downloads the authoritative rc1 amd64 archive from run 27863179327
+# and runs the demo twice from extracted packaged files (no source-tree binary).
+#
+# Assertions per run:
+#   - verdict == VXLAN_FRAGMENTATION_OBSERVED
+#   - fragmentation_scope == global_corroborated
+#   - max_outer_ip_len > underlay_mtu
+#   - recommended_overlay_mtu == underlay_mtu - 50
+#
+# Cleanup assertions after each run:
+#   - demo-ns1 and demo-ns2 netns absent
+#   - /sys/fs/bpf/vxlan-tracer-demo absent
+#   - no lingering vxlan-tracer process
+
+name: Live demo (packaged rc1 archive)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'CI run ID of the rc1 artifact to download'
+        required: false
+        default: '27863179327'
+
+jobs:
+  demo-amd64:
+    name: Demo — amd64 packaged archive
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            iproute2 iputils-ping python3
+          python3 --version
+          uname -a
+
+      - name: Download rc1 amd64 archive
+        uses: actions/download-artifact@v4
+        with:
+          name: vxlan-tracer-linux-amd64
+          run-id: ${{ github.event.inputs.run_id || '27863179327' }}
+          github-token: ${{ github.token }}
+          path: .
+
+      - name: Extract package and show version
+        run: |
+          PKGDIR=$(mktemp -d)
+          tar -xzf vxlan-tracer-linux-amd64.tar.gz -C "$PKGDIR"
+          PKG="$PKGDIR/vxlan-tracer-linux-amd64"
+          echo "PKG=$PKG" >> "$GITHUB_ENV"
+          echo "=== Package ==="
+          ls -la "$PKG/"
+          ls -la "$PKG/bpf/"
+          echo "=== Binary version ==="
+          "$PKG/vxlan-tracer" --version
+          echo "=== Archive SHA-256 ==="
+          sha256sum vxlan-tracer-linux-amd64.tar.gz
+
+      - name: Mount bpffs
+        run: |
+          mount | grep -q 'type bpf' && echo "bpffs already mounted" \
+            || sudo mount -t bpf bpf /sys/fs/bpf
+
+      - name: Demo run 1
+        run: |
+          echo "=== Demo run 1 ==="
+          sudo BINARY="$PKG/vxlan-tracer" BPF_DIR="$PKG/bpf" DURATION=15s \
+            bash "$PKG/scripts/demo.sh" 2>&1 | tee /tmp/demo-run1.log
+          echo "Exit: $?"
+
+      - name: Verify demo run 1 assertions
+        run: |
+          JSON_LINE=$(grep '"verdict"' /tmp/demo-run1.log | head -1)
+          echo "JSON: $JSON_LINE"
+          python3 - <<'EOF'
+          import json, sys
+
+          with open('/tmp/demo-run1.log') as f:
+              content = f.read()
+
+          json_line = next((l.strip() for l in content.splitlines() if '"verdict"' in l), None)
+          if not json_line:
+              print('[FAIL] no JSON output found in demo-run1.log')
+              sys.exit(1)
+
+          d = json.loads(json_line)
+          verdict = d.get('verdict', '')
+          scope = d.get('fragmentation_scope', '')
+          max_outer = d.get('max_outer_ip_len', 0)
+          underlay_mtu = d.get('underlay_mtu', 0)
+          rec_mtu = d.get('recommended_overlay_mtu', 0)
+
+          fail = 0
+
+          if verdict == 'VXLAN_FRAGMENTATION_OBSERVED':
+              print('[PASS] verdict=VXLAN_FRAGMENTATION_OBSERVED')
+          else:
+              print(f'[FAIL] verdict={verdict}'); fail = 1
+
+          if scope == 'global_corroborated':
+              print('[PASS] fragmentation_scope=global_corroborated')
+          else:
+              print(f'[FAIL] fragmentation_scope={scope!r}'); fail = 1
+
+          if max_outer > underlay_mtu:
+              print(f'[PASS] max_outer_ip_len={max_outer} > underlay_mtu={underlay_mtu}')
+          else:
+              print(f'[FAIL] max_outer_ip_len={max_outer} not > underlay_mtu={underlay_mtu}'); fail = 1
+
+          if rec_mtu == underlay_mtu - 50:
+              print(f'[PASS] recommended_overlay_mtu={rec_mtu} == underlay_mtu({underlay_mtu}) - 50')
+          else:
+              print(f'[FAIL] recommended_overlay_mtu={rec_mtu} != underlay_mtu({underlay_mtu}) - 50'); fail = 1
+
+          print(f'Full JSON: {json_line}')
+          sys.exit(fail)
+          EOF
+
+      - name: Cleanup check after demo run 1
+        run: |
+          echo "=== Cleanup check after demo run 1 ==="
+          FAIL=0
+          ip netns list 2>/dev/null | grep demo- && { echo '[FAIL] demo netns still present'; FAIL=1; } \
+            || echo '[PASS] no demo netns remaining'
+          ls /sys/fs/bpf/vxlan-tracer-demo 2>/dev/null \
+            && { echo '[FAIL] demo pin dir /sys/fs/bpf/vxlan-tracer-demo still present'; FAIL=1; } \
+            || echo '[PASS] /sys/fs/bpf/vxlan-tracer-demo absent'
+          ip link show demo-veth1 2>/dev/null \
+            && { echo '[FAIL] demo-veth1 still present'; FAIL=1; } \
+            || echo '[PASS] demo-veth1 absent'
+          pgrep -x vxlan-tracer 2>/dev/null \
+            && { echo '[FAIL] vxlan-tracer process still running'; FAIL=1; } \
+            || echo '[PASS] no lingering vxlan-tracer process'
+          [ "$FAIL" = "0" ] || exit 1
+
+      - name: Demo run 2 (idempotency check)
+        run: |
+          echo "=== Demo run 2 ==="
+          sudo BINARY="$PKG/vxlan-tracer" BPF_DIR="$PKG/bpf" DURATION=15s \
+            bash "$PKG/scripts/demo.sh" 2>&1 | tee /tmp/demo-run2.log
+          echo "Exit: $?"
+
+      - name: Verify demo run 2 assertions
+        run: |
+          JSON_LINE=$(grep '"verdict"' /tmp/demo-run2.log | head -1)
+          echo "JSON: $JSON_LINE"
+          python3 - <<'EOF'
+          import json, sys
+
+          with open('/tmp/demo-run2.log') as f:
+              content = f.read()
+
+          json_line = next((l.strip() for l in content.splitlines() if '"verdict"' in l), None)
+          if not json_line:
+              print('[FAIL] no JSON output in demo-run2.log'); sys.exit(1)
+
+          d = json.loads(json_line)
+          verdict = d.get('verdict', '')
+          scope = d.get('fragmentation_scope', '')
+          fail = 0
+
+          if verdict == 'VXLAN_FRAGMENTATION_OBSERVED':
+              print('[PASS] run 2: verdict=VXLAN_FRAGMENTATION_OBSERVED')
+          else:
+              print(f'[FAIL] run 2: verdict={verdict}'); fail = 1
+
+          if scope == 'global_corroborated':
+              print('[PASS] run 2: fragmentation_scope=global_corroborated')
+          else:
+              print(f'[FAIL] run 2: fragmentation_scope={scope!r}'); fail = 1
+
+          print(f'Full JSON: {json_line}')
+          sys.exit(fail)
+          EOF
+
+      - name: Cleanup check after demo run 2
+        run: |
+          echo "=== Cleanup check after demo run 2 ==="
+          FAIL=0
+          ip netns list 2>/dev/null | grep demo- && { echo '[FAIL] demo netns still present'; FAIL=1; } \
+            || echo '[PASS] no demo netns remaining'
+          ls /sys/fs/bpf/vxlan-tracer-demo 2>/dev/null \
+            && { echo '[FAIL] demo pin dir still present'; FAIL=1; } \
+            || echo '[PASS] /sys/fs/bpf/vxlan-tracer-demo absent'
+          ip link show demo-veth1 2>/dev/null \
+            && { echo '[FAIL] demo-veth1 still present'; FAIL=1; } \
+            || echo '[PASS] demo-veth1 absent'
+          pgrep -x vxlan-tracer 2>/dev/null \
+            && { echo '[FAIL] vxlan-tracer process still running'; FAIL=1; } \
+            || echo '[PASS] no lingering vxlan-tracer process'
+          [ "$FAIL" = "0" ] || exit 1
+
+      - name: Upload demo logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-logs-amd64-rc1
+          path: |
+            /tmp/demo-run1.log
+            /tmp/demo-run2.log
+          if-no-files-found: ignore
+          retention-days: 14
