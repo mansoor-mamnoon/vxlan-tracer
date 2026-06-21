@@ -9,8 +9,8 @@ Purpose: Complete final v0.1.0-rc1 qualification using one authoritative artifac
 
 ### Commit 1 (19ef405): RC1 CI audit
 Audited workflow run 27863179327 (workflow_dispatch, version=v0.1.0-rc1, commit 74cf2d7).
-All 8 required gate jobs confirmed PASS in a single run:
-build-amd64, build-arm64, combine-checksums, and the sub-steps within each:
+All required jobs and qualification steps confirmed PASS in a single run:
+build-amd64, build-arm64, combine-checksums (3 jobs); within each build job:
 verify-release-archive, isolation test, 6-scenario suite per arch.
 Evidence: evidence/day-17-rc1-audit.md
 

@@ -1,6 +1,6 @@
-# demo.yml — Live demo of vxlan-tracer from packaged rc1 archive
+# demo.yml — Live demo of vxlan-tracer from a packaged release archive
 #
-# This workflow downloads the authoritative rc1 amd64 archive from run 27863179327
+# Downloads the amd64 archive artifact from the specified package build run
 # and runs the demo twice from extracted packaged files (no source-tree binary).
 #
 # Assertions per run:
@@ -20,9 +20,8 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: 'CI run ID of the rc1 artifact to download'
-        required: false
-        default: '27863179327'
+        description: 'CI run ID of the release-package artifact to download'
+        required: true
 
 jobs:
   demo-amd64:
@@ -42,7 +41,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: vxlan-tracer-linux-amd64
-          run-id: ${{ github.event.inputs.run_id || '27863179327' }}
+          run-id: ${{ github.event.inputs.run_id }}
           github-token: ${{ github.token }}
           path: .
 

@@ -12,7 +12,20 @@ lab-only veth topology.
 
 ---
 
-## Quick demo (Linux + root + compiled binary + BPF objects)
+## Quick demo from packaged release archive (Linux + root)
+
+Download and verify the release archive, then run the bundled demo script:
+
+```sh
+tar -xzf vxlan-tracer-linux-amd64.tar.gz
+cd vxlan-tracer-linux-amd64
+sudo bash scripts/preflight.sh   # verify kernel/BTF prerequisites
+sudo bash scripts/demo.sh        # ~25 s stale-MTU demo
+./vxlan-tracer --version
+./vxlan-tracer --help
+```
+
+## Quick demo from source (Linux + root + build dependencies)
 
 ```sh
 make bpf          # compile BPF objects (Linux only)
