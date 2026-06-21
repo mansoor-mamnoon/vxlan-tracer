@@ -329,6 +329,25 @@ of what constitutes a validated CNI entry.
 
 All results from netns lab (single-host veth topology). No two-node CNI cluster tested.
 
+## Looking for design partners
+
+If your Kubernetes or VXLAN overlay network is dropping large packets silently
+— `kubectl cp` hangs, file transfers stall, but ping works fine — we want to
+hear from you.
+
+vxlan-tracer is an experimental prerelease. It has been validated in a
+controlled netns lab on four kernels (5.15–6.10, amd64 and arm64), but not
+yet against a real k3s or Flannel cluster. If you run it on a staging or
+non-critical node and share the result, you will directly shape what the tool
+becomes next.
+
+**To participate:** open an
+[External run report](https://github.com/mansoor-mamnoon/vxlan-tracer/issues/new?template=external-run-report.md)
+with your environment and verdict. Any outcome — including "no issue observed"
+or "tool crashed" — is useful.
+
+---
+
 ## Lab setup
 
 See [docs/lab-topology.md](docs/lab-topology.md) and the scripts in `scripts/`.

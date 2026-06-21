@@ -39,3 +39,47 @@ func DetectVXLAN(iface string) (VXLANInfo, error) {
 		VNI:  uint32(vx.VxlanId),
 	}, nil
 }
+
+// VXLANCandidate describes a VXLAN interface found on this host.
+// It is returned by ListVXLAN and does not require root or BPF privileges.
+type VXLANCandidate struct {
+	Name     string `json:"name"`
+	VNI      uint32 `json:"vni"`
+	Port     uint16 `json:"port"`
+	MTU      int    `json:"mtu"`
+	Underlay string `json:"underlay,omitempty"` // inferred from VtepDevIndex; empty if not resolvable
+}
+
+// ListVXLAN returns all VXLAN-type interfaces on the host.
+// It does not require root or BPF privileges on most kernels.
+// Returns a non-nil empty slice (not an error) when no VXLAN interfaces are found.
+func ListVXLAN() ([]VXLANCandidate, error) {
+	links, err := netlink.LinkList()
+	if err != nil {
+		return nil, fmt.Errorf("list interfaces: %w", err)
+	}
+	out := make([]VXLANCandidate, 0)
+	for _, lnk := range links {
+		vx, ok := lnk.(*netlink.Vxlan)
+		if !ok {
+			continue
+		}
+		port := uint16(vx.Port)
+		if port == 0 {
+			port = 4789
+		}
+		c := VXLANCandidate{
+			Name: lnk.Attrs().Name,
+			VNI:  uint32(vx.VxlanId),
+			Port: port,
+			MTU:  lnk.Attrs().MTU,
+		}
+		if vx.VtepDevIndex != 0 {
+			if under, err := netlink.LinkByIndex(vx.VtepDevIndex); err == nil {
+				c.Underlay = under.Attrs().Name
+			}
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}

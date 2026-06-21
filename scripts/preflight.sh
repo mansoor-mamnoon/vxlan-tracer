@@ -216,13 +216,17 @@ else
 fi
 
 # --- scapy ---
+# scapy is only required for scripts/inject_ptb.py (manual PTB injection scenarios).
+# It is NOT required for scripts/demo.sh (fragmentation detection) or normal diagnostic runs.
 echo ""
-echo "-- Python scapy (PTB injection) --"
+echo "-- Python scapy (PTB injection only — optional for most users) --"
 if python3 -c "import scapy" 2>/dev/null; then
     SCAPY_VER=$(python3 -c "import scapy; print(scapy.__version__)" 2>/dev/null || echo "unknown")
     _pass "scapy $SCAPY_VER"
 else
-    _fail "DEPENDENCY" "python3 scapy not found. Run: pip3 install scapy"
+    _warn "python3 scapy not found. Only required for PTB injection (scripts/inject_ptb.py)."
+    _info "  The standard fragmentation demo (scripts/demo.sh) does NOT require scapy."
+    _info "  To install: pip3 install scapy"
 fi
 
 # --- libbpf headers ---
