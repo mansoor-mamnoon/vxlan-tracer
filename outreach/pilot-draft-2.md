@@ -52,7 +52,7 @@
 > sudo vxlan-tracer --overlay <cilium_vxlan> --underlay <eth0> --duration 60s
 > ```
 >
-> If the load fails or you get an unexpected verdict, `vxlan-tracer collect-support`
+> If the load fails or you get an unexpected verdict, `vxlan-tracer collect-environment`
 > creates a privacy-safe bundle you can attach here. That alone is useful for the
 > kernel matrix even if the verdict isn't what we expect.
 >

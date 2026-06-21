@@ -57,9 +57,9 @@ sudo vxlan-tracer --overlay <iface> --underlay <iface> [--flags]
 
 </details>
 
-## collect-support bundle
+## collect-environment bundle
 
-<!-- Run `vxlan-tracer collect-support` and attach the .tar.gz — it's the fastest path to a diagnosis. -->
+<!-- Run `vxlan-tracer collect-environment` and attach the .tar.gz — it's the fastest path to a diagnosis. -->
 
 ## Additional context
 

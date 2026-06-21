@@ -150,6 +150,13 @@ func Attach(cfg Config) (*Attachment, error) {
 		lockFD: lockFD,
 	}
 
+	if cfg.PinDir != "" {
+		if err := os.MkdirAll(cfg.PinDir, 0700); err != nil {
+			a.Close()
+			return nil, fmt.Errorf("create pin dir %q: %w", cfg.PinDir, err)
+		}
+	}
+
 	underlay, err := netlink.LinkByName(cfg.Underlay)
 	if err != nil {
 		a.Close()

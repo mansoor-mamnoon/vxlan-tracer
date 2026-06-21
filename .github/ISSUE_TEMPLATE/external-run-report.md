@@ -61,9 +61,9 @@ sudo vxlan-tracer --overlay <iface> --underlay <iface> --duration <time>
 
 </details>
 
-## collect-support bundle
+## collect-environment bundle
 
-<!-- Optional but very helpful: run `vxlan-tracer collect-support` and attach the .tar.gz here. -->
+<!-- Optional but very helpful: run `vxlan-tracer collect-environment` and attach the .tar.gz here. -->
 
 ## Notes
 

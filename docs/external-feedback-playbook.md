@@ -34,7 +34,7 @@ A wrong verdict is one of:
 - Tool reports `PTB_SUPPRESSED` but PTBs are definitely reaching the pod
 - Tool reports `PTB_DELIVERED` but PMTUD is confirmed broken
 
-**Immediate ask:** run `vxlan-tracer collect-support` and attach the bundle. This gives kernel version, symbol availability, BTF status, and BPF filesystem status — the most common root causes of wrong verdicts.
+**Immediate ask:** run `vxlan-tracer collect-environment` and attach the bundle. This gives kernel version, symbol availability, BTF status, and BPF filesystem status — the most common root causes of wrong verdicts.
 
 **Common causes:**
 - `ip_do_fragment` not a T symbol on this kernel (inlined) → false negative for fragmentation
@@ -67,7 +67,7 @@ When a user files a compatibility problem without enough information, ask for th
 4. The full stderr output (not just the last line)
 
 **If still unclear:**
-5. `vxlan-tracer collect-support` bundle
+5. `vxlan-tracer collect-environment` bundle
 6. `sudo bash scripts/preflight.sh` output
 
 **If verdict is wrong:**
@@ -124,7 +124,7 @@ If a report has too little information to act on:
 > 3. The exact command you ran (with flags)
 > 4. The full stderr output
 >
-> Alternatively, `vxlan-tracer collect-support` packages all of the above into a single file you can attach here.
+> Alternatively, `vxlan-tracer collect-environment` packages all of the above into a single file you can attach here.
 
 ---
 

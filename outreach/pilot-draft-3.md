@@ -69,7 +69,7 @@ tool is directly relevant.
 >
 > If the tool fails to load (BPF verifier error, symbol not kprobeable), run
 > `sudo bash scripts/preflight.sh` and share the output here — that's useful even
-> without a diagnostic run. `vxlan-tracer collect-support` creates a privacy-safe
+> without a diagnostic run. `vxlan-tracer collect-environment` creates a privacy-safe
 > bundle you can attach to this issue.
 >
 > Happy to help interpret whatever the tool reports.

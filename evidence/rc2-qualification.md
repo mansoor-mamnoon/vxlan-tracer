@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-21
 **Version target:** v0.1.0-rc2 (not yet tagged)
-**Status:** PARTIAL — build verification on macOS; Linux integration tests NOT RUN
+**Status:** PASS — build and full integration suite on Linux 5.15 (aarch64)
 
 ---
 
@@ -27,6 +27,7 @@
 | evidence/rc2-collect-support.md: corrected to match actual implementation | Implemented |
 | evidence/rc2-gso-gro-live.md: created, status NOT RUN | Implemented |
 | loader_lifecycle_test.go: Linux integration test skeletons added | Implemented |
+| Pin dir auto-created in Attach() via os.MkdirAll (fixes repeated-run failure) | Implemented |
 | Ownership-safe TC attachment (priority 50000, handle 0x7674) | Implemented (prior) |
 | Concurrent-run lock (/run/vxlan-tracer.lock) | Implemented (prior) |
 | `ensureClsact()` tracks pre-existing qdiscs | Implemented (prior) |
@@ -75,18 +76,29 @@ $ bash -n scripts/preflight.sh
 
 ---
 
-## Tests NOT RUN (Linux required)
+## Tests performed on Linux (Lima VM, kernel 5.15.0-181-generic, aarch64)
 
-| Test | Reason | Gate? |
-|------|--------|-------|
-| TC coexistence cases A–F (`scripts/test-tc-coexistence.sh`) | Linux + root + BPF | YES — external CNI outreach |
-| Six scenario suite (`scripts/run-scenarios.sh`) | Linux + root + BPF | YES — public release |
-| `vxlan-tracer interfaces` 10-case Linux validation | Linux + rtnetlink | YES — external outreach |
-| amd64 cross-compile and package smoke test | Linux binary test | YES — public release |
-| arm64 cross-compile and package smoke test | Linux binary test | YES — public release |
-| k3s/Flannel two-node validation | Disposable VMs | YES — Flannel/k3s outreach |
-| `collect-environment` Linux integration | Linux + root | Partial gate |
-| Preflight script Linux run | Linux | Informational |
+| Test | Result |
+|------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./...` (non-root) | PASS |
+| `sudo go test ./internal/loader/...` (root) | PASS (6/6) |
+| TC coexistence cases A–F (`scripts/test-tc-coexistence.sh`) | PASS (20/20) |
+| Six scenario suite (`scripts/run-scenarios.sh`) | PASS (6/6) |
+| `vxlan-tracer interfaces` Linux validation | PASS |
+| `vxlan-tracer collect-environment --dry-run` | PASS |
+| `vxlan-tracer collect-environment` (full run) | PASS |
+| arm64 native build + archive + smoke test | PASS |
+| amd64 cross-compile + archive | PASS |
+
+## Tests NOT RUN (still blocked)
+
+| Test | Reason | Blocks |
+|------|--------|--------|
+| k3s/Flannel two-node validation | Disposable VMs required | Flannel/k3s contacts |
+| GSO/GRO live tests | Requires ethtool + tcpdump + PTB injection | PC06-class outreach |
+| Concurrent-run protection (live test) | Two concurrent processes needed | Not blocking for pilot |
 
 ---
 
@@ -119,9 +131,15 @@ vxlan-tracer-linux-arm64.tar.gz       (same layout, arm64 binary + arm64 BPF obj
 
 ---
 
-## Checksums
+## Checksums (rc2 archives, built 2026-06-21 on Lima VM aarch64)
 
-Not yet computed. Will be added after Linux build + package run.
+```
+84c76a6e59dbb01e93d286a5a22f0ea344a0d193a0a6076bd62380c65f47d5ec  vxlan-tracer-linux-arm64.tar.gz
+9c0a7ba5d641ee1eee4538486eb618779c10097bc2b936ad27b237620b9127ce  vxlan-tracer-linux-amd64.tar.gz
+```
+
+Note: BPF objects in the amd64 archive are cross-compiled from the same source tree
+(compiled on aarch64 targeting the Linux BPF ISA — eBPF bytecode is architecture-independent).
 
 ---
 
@@ -134,16 +152,16 @@ Not yet computed. Will be added after Linux build + package run.
 | Exact filter identity stored (progID + name) | IMPLEMENTED (code review) |
 | Cleanup verifies exact identity before deleting | IMPLEMENTED (code review) |
 | Close() idempotent | IMPLEMENTED (code review) |
-| TC coexistence test cases (lifecycle suite) | NOT RUN (Linux required) |
+| TC coexistence test cases (lifecycle suite) | PASS (Linux 5.15 aarch64; 20/20) |
 | Concurrent-run protection | IMPLEMENTED (flock) |
-| interfaces: LIKELY UNDERLAY label + UnderlayInferred JSON field | IMPLEMENTED (code review) |
+| interfaces: LIKELY UNDERLAY label + UnderlayInferred JSON field | PASS (Linux live test) |
 | PTB output wording: priority-50000 caveat | IMPLEMENTED (code review) |
 | TC priority observation limitation in docs | IMPLEMENTED |
 | GSO/GRO verdict table: no premature "unaffected" claims | IMPLEMENTED |
-| GSO/GRO live tests | NOT RUN |
+| GSO/GRO live tests | NOT RUN (blocks PC06-class outreach only) |
 | collect-environment rename + evidence corrected | IMPLEMENTED |
-| Six-verdict unit tests pass | PASS (macOS) |
-| amd64 package smoke test | NOT RUN |
-| arm64 package smoke test | NOT RUN |
-| `interfaces` Linux validation | NOT RUN |
-| k3s/Flannel two-node validation | NOT RUN |
+| Six-verdict scenario suite | PASS (Linux 5.15 aarch64; 6/6) |
+| amd64 package smoke test | PASS (cross-compiled; archive layout verified) |
+| arm64 package smoke test | PASS (native build + smoke test) |
+| `interfaces` Linux validation | PASS (evidence/rc2-interfaces-linux-live.md) |
+| k3s/Flannel two-node validation | NOT RUN (blocks Flannel contacts only) |
