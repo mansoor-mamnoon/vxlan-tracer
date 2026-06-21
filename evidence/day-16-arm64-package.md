@@ -2,6 +2,13 @@
 
 arm64 release archive qualification — CI run 27860935576, build-arm64 job, 2026-06-20.
 
+> **Note:** This file documents qualification of the dev-version archive (binary reports
+> `vxlan-tracer dev (commit 8fbc6f7)`). The version-correct rc1 archive (binary reports
+> `vxlan-tracer v0.1.0-rc1 (commit 74cf2d7)`) was produced in CI run 27863179327 and
+> is the authoritative release artifact. SHA-256 and package gates for the rc1 archive
+> are recorded in evidence/day-17-rc1-artifact-provenance.md and
+> evidence/day-17-rc1-independent-verification.md.
+
 ---
 
 ## Environment

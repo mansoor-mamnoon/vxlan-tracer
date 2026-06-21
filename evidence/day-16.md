@@ -56,7 +56,7 @@ All commits pushed to origin/main.
 | Human output: Verdict: captured live | PASS | CI 27860935585 human-output: [PASS] contains Verdict: |
 | Human output: Evidence: captured live | PASS | CI 27860935585 human-output: [PASS] contains Evidence: |
 | PTB_SUPPRESSED: Verdict: captured live | PASS | CI 27860935585 human-output: PTBs at TC ingress: 5, at icmp_rcv: 0 |
-| Stale-object 6/6 PASS | PASS | CI 27860935585 bpf-scenario: Results: 6 passed, 0 failed |
+| Stale-object integration: 6 assertions PASS | PASS | CI 27860935585 bpf-scenario: Results: 6 passed, 0 failed |
 | 6-scenario source-tree 6/6 PASS | PASS | CI 27860935585 bpf-scenario: Results: 6 passed, 0 failed |
 | combine-checksums: all three jobs PASS | PASS | CI 27862917754: build-amd64 ✓ build-arm64 ✓ combine-checksums ✓ |
 | Historical matrix corrected (linuxkit 5/5) | PASS | commit 65c043f |
