@@ -37,3 +37,8 @@ func (a *Attachment) Close() error { return nil }
 func (a *Attachment) MTUs() (overlayMTU, underlayMTU int, err error) {
 	return 0, 0, errors.New("vxlan-tracer loader: MTU lookup requires Linux")
 }
+
+// RemoveStaleFilters always fails on non-Linux platforms.
+func RemoveStaleFilters(overlay, underlay string, dryRun bool) (removed, skipped int, err error) {
+	return 0, 0, errors.New("vxlan-tracer loader: TC filter cleanup requires Linux")
+}

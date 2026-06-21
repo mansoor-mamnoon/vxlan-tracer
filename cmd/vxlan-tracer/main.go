@@ -58,8 +58,15 @@ func main() {
 		switch os.Args[1] {
 		case "interfaces":
 			os.Exit(runInterfaces(os.Args[2:]))
+		case "collect-environment":
+			os.Exit(runCollectEnvironment(os.Args[2:]))
 		case "collect-support":
-			os.Exit(runCollectSupport(os.Args[2:]))
+			// collect-support is renamed to collect-environment.
+			// Keep the old name as an alias with a deprecation notice.
+			fmt.Fprintln(os.Stderr, "note: 'collect-support' is renamed to 'collect-environment'")
+			os.Exit(runCollectEnvironment(os.Args[2:]))
+		case "cleanup":
+			os.Exit(runCleanup(os.Args[2:]))
 		}
 	}
 
@@ -227,21 +234,29 @@ func printHuman(d diag.Diagnosis, obs diag.Observation) {
 
 	case diag.VerdictPTBDelivered:
 		fmt.Println("Evidence:")
-		fmt.Printf("  PTBs at TC ingress (pre-netfilter): %d\n", obs.PTBIngressTotal)
-		fmt.Printf("  PTBs at icmp_rcv  (post-netfilter): %d  ← kernel received them\n", obs.ICMPRcvTotal)
+		fmt.Printf("  PTBs observed at vxlan-tracer TC ingress hook: %d\n", obs.PTBIngressTotal)
+		fmt.Printf("  PTBs at icmp_rcv (post-netfilter):              %d  ← kernel received them\n", obs.ICMPRcvTotal)
 		fmt.Println("Interpretation:")
-		fmt.Println("  PTBs are not being suppressed. The kernel can act on them for PMTUD.")
+		fmt.Println("  PTBs are not being suppressed between vxlan-tracer's observation point")
+		fmt.Println("  and icmp_rcv. The kernel can act on them for PMTUD.")
+		fmt.Println("  Note: an earlier TC program (priority < 50000) may have dropped some PTBs")
+		fmt.Println("  before vxlan-tracer observed them. This verdict does not rule that out.")
 		fmt.Println("  If large requests still fail, check that the application respects PTBs")
 		fmt.Println("  and that the overlay MTU is correctly configured.")
 
 	case diag.VerdictPTBSuppressed:
 		fmt.Println("Evidence:")
-		fmt.Printf("  PTBs at TC ingress (pre-netfilter): %d\n", obs.PTBIngressTotal)
-		fmt.Printf("  PTBs at icmp_rcv  (post-netfilter): %d  ← dropped before kernel\n", obs.ICMPRcvTotal)
+		fmt.Printf("  PTBs observed at vxlan-tracer TC ingress hook: %d\n", obs.PTBIngressTotal)
+		fmt.Printf("  PTBs at icmp_rcv (post-netfilter):              %d  ← dropped after observation point\n", obs.ICMPRcvTotal)
+		fmt.Println("Interpretation:")
+		fmt.Println("  PTBs were visible at vxlan-tracer's TC ingress hook but did not reach")
+		fmt.Println("  icmp_rcv. The difference is consistent with suppression between those")
+		fmt.Println("  two observation points.")
+		fmt.Println("  Note: earlier TC programs (priority < 50000) may also drop PTBs before")
+		fmt.Println("  vxlan-tracer observes them, which would undercount PTBs here.")
 		fmt.Println("Recommendation:")
-		fmt.Println("  PTBs are being dropped between the NIC and icmp_rcv.")
-		fmt.Println("  Check:  iptables/nftables INPUT chain for ICMP type 3 code 4 DROP rules.")
-		fmt.Println("  Fix:    allow ICMP fragmentation-needed (type 3 code 4) through your firewall.")
+		fmt.Println("  Check: iptables/nftables INPUT chain for ICMP type 3 code 4 DROP rules.")
+		fmt.Println("  Fix:   allow ICMP fragmentation-needed (type 3 code 4) through your firewall.")
 
 	case diag.VerdictMTUMisconfiguration:
 		fmt.Println("Evidence:")
@@ -378,7 +393,7 @@ func runInterfaces(args []string) int {
 	}
 
 	fmt.Printf("VXLAN interfaces on this host:\n\n")
-	fmt.Printf("  %-16s  %-6s  %-6s  %-6s  %s\n", "NAME", "VNI", "PORT", "MTU", "UNDERLAY")
+	fmt.Printf("  %-16s  %-6s  %-6s  %-6s  %s\n", "NAME", "VNI", "PORT", "MTU", "LIKELY UNDERLAY")
 	for _, c := range candidates {
 		underlay := c.Underlay
 		if underlay == "" {
@@ -387,7 +402,10 @@ func runInterfaces(args []string) int {
 		fmt.Printf("  %-16s  %-6d  %-6d  %-6d  %s\n", c.Name, c.VNI, c.Port, c.MTU, underlay)
 	}
 	fmt.Println()
-	fmt.Println("Suggested invocations:")
+	fmt.Println("Underlay is inferred from the VXLAN device's configured VTEP link.")
+	fmt.Println("Verify it before running the privileged diagnostic.")
+	fmt.Println()
+	fmt.Println("Suggested invocation (verify interfaces first):")
 	for _, c := range candidates {
 		if c.Underlay != "" {
 			fmt.Printf("  sudo vxlan-tracer --overlay %s --underlay %s\n", c.Name, c.Underlay)
@@ -398,13 +416,20 @@ func runInterfaces(args []string) int {
 	return 0
 }
 
-// runCollectSupport implements "vxlan-tracer collect-support". It collects
-// privacy-safe system diagnostic information into a tar.gz bundle suitable
-// for attaching to a GitHub issue. No BPF privileges are required.
-func runCollectSupport(args []string) int {
-	fs := flag.NewFlagSet("collect-support", flag.ContinueOnError)
+// runCollectEnvironment implements "vxlan-tracer collect-environment".
+// It collects static, privacy-safe system environment information into a
+// tar.gz bundle. This command does NOT run the tracer or capture live
+// diagnostic data; it only collects static host information.
+//
+// For a full diagnostic bundle (preflight output, tracer run, TC filter
+// state before/after, map pins), run the tracer separately and attach its
+// output to your issue report.
+//
+// No root or BPF privileges are required.
+func runCollectEnvironment(args []string) int {
+	fs := flag.NewFlagSet("collect-environment", flag.ContinueOnError)
 	dryRun := fs.Bool("dry-run", false, "Show what would be collected without creating a file")
-	out := fs.String("out", "", "Output file path (default: vxlan-tracer-support-<timestamp>.tar.gz)")
+	out := fs.String("out", "", "Output file path (default: vxlan-tracer-env-<timestamp>.tar.gz)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -434,11 +459,12 @@ func runCollectSupport(args []string) int {
 
 	outPath := *out
 	if outPath == "" {
-		outPath = fmt.Sprintf("vxlan-tracer-support-%s.tar.gz", time.Now().Format("20060102-150405"))
+		outPath = fmt.Sprintf("vxlan-tracer-env-%s.tar.gz", time.Now().Format("20060102-150405"))
 	}
 
 	files := make(map[string][]byte)
-	fmt.Println("Collecting diagnostics...")
+	fmt.Println("Collecting environment information...")
+	fmt.Println("(Static host info only — tracer not run; see collect-environment --help)")
 
 	// system-info.txt
 	{
@@ -593,12 +619,13 @@ func runCollectSupport(args []string) int {
 		return 2
 	}
 
-	fmt.Printf("\nBundle written: %s\n", outPath)
+	fmt.Printf("\nEnvironment bundle written: %s\n", outPath)
+	fmt.Println("Contents: static host info only (no tracer run, no packet data).")
 	fmt.Println("To share: attach this file to your GitHub issue.")
 	return 0
 }
 
-const supportBundlePrivacyNotice = `PRIVACY NOTICE — vxlan-tracer collect-support bundle
+const supportBundlePrivacyNotice = `PRIVACY NOTICE — vxlan-tracer collect-environment bundle
 
 INCLUDED
   - Linux kernel version and architecture (from /proc/version)
@@ -620,6 +647,44 @@ NOT INCLUDED
   - Pod, container, or workload information
   - The full /proc/kallsyms symbol table
 `
+
+// runCleanup implements "vxlan-tracer cleanup". It removes stale vxlan-tracer
+// TC filters left behind by a previous run that was killed without cleanup
+// (e.g. SIGKILL). A filter is removed only if its priority is 50000 AND its
+// full handle is 0x7674_0001. Filters at any other priority or handle are
+// never touched. This command is NOT called automatically.
+func runCleanup(args []string) int {
+	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
+	dryRun := fs.Bool("dry-run", false, "Show what would be removed without removing anything")
+	overlayFlag := fs.String("overlay", "", "VXLAN overlay interface to clean up (e.g. vxlan0)")
+	underlayFlag := fs.String("underlay", "", "Underlay interface to clean up (e.g. eth0)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *overlayFlag == "" && *underlayFlag == "" {
+		fmt.Fprintln(os.Stderr, "error: --overlay or --underlay (or both) required")
+		fmt.Fprintln(os.Stderr, "usage: vxlan-tracer cleanup --overlay <iface> --underlay <iface> [--dry-run]")
+		return 2
+	}
+	if *dryRun {
+		fmt.Println("Dry-run: no filters will be removed.")
+		fmt.Println()
+	}
+	removed, skipped, err := loader.RemoveStaleFilters(*overlayFlag, *underlayFlag, *dryRun)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cleanup error: %v\n", err)
+	}
+	fmt.Println()
+	if *dryRun {
+		fmt.Printf("Would remove: %d filter(s). Skipped: %d.\n", removed, skipped)
+	} else {
+		fmt.Printf("Removed: %d filter(s). Skipped (not found or not vxlan-tracer): %d.\n", removed, skipped)
+	}
+	if err != nil {
+		return 1
+	}
+	return 0
+}
 
 // printJSON emits a machine-readable JSON report on stdout. All diagnostic
 // counters and MTU values from the observation window are included so

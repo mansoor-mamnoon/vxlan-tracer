@@ -43,11 +43,12 @@ func DetectVXLAN(iface string) (VXLANInfo, error) {
 // VXLANCandidate describes a VXLAN interface found on this host.
 // It is returned by ListVXLAN and does not require root or BPF privileges.
 type VXLANCandidate struct {
-	Name     string `json:"name"`
-	VNI      uint32 `json:"vni"`
-	Port     uint16 `json:"port"`
-	MTU      int    `json:"mtu"`
-	Underlay string `json:"underlay,omitempty"` // inferred from VtepDevIndex; empty if not resolvable
+	Name             string `json:"name"`
+	VNI              uint32 `json:"vni"`
+	Port             uint16 `json:"port"`
+	MTU              int    `json:"mtu"`
+	Underlay         string `json:"underlay,omitempty"`          // inferred from VtepDevIndex; empty if not resolvable
+	UnderlayInferred bool   `json:"underlay_inferred,omitempty"` // true when Underlay was resolved from VtepDevIndex
 }
 
 // ListVXLAN returns all VXLAN-type interfaces on the host.
@@ -77,6 +78,7 @@ func ListVXLAN() ([]VXLANCandidate, error) {
 		if vx.VtepDevIndex != 0 {
 			if under, err := netlink.LinkByIndex(vx.VtepDevIndex); err == nil {
 				c.Underlay = under.Attrs().Name
+				c.UnderlayInferred = true
 			}
 		}
 		out = append(out, c)
