@@ -11,6 +11,9 @@ package loader
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"syscall"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -18,19 +21,54 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Config describes which interfaces and compiled BPF objects to attach.
-type Config struct {
-	Overlay         string // VXLAN overlay interface, e.g. vxlan0
-	Underlay        string // Underlay physical interface, e.g. eth0
-	PinDir          string // bpffs directory for pinned maps, e.g. /sys/fs/bpf/vxlan-tracer
-	TCIngressObj    string // compiled tc_ingress_eth0.bpf.o path
-	TCEgressObj     string // compiled tc_egress_vxlan0.bpf.o path
-	KprobeObj       string // compiled kprobes.bpf.o path
-	FragKprobeObj   string // compiled frag_kprobes.bpf.o path (ip_do_fragment counter)
-	VXLANPort       uint16 // VXLAN UDP destination port in host byte order (0 = default 4789)
+// TC filter identity for vxlan-tracer.
+//
+// Priority 50000 is chosen to be well above typical CNI tool priorities
+// (Cilium: 1–10, Calico: 1, tc flower classifiers: 1–1000) so vxlan-tracer
+// filters run last and never interfere with traffic forwarding. Running last
+// does not affect correctness: all vxlan-tracer programs return TC_ACT_OK
+// unconditionally, and PTBs/outer-packets are visible at any priority as long
+// as no earlier filter returns TC_ACT_SHOT for them.
+//
+// Handle major 0x7674 ('v','t' in ASCII) is used as an ownership marker.
+// Any filter at priority 50000 with this handle major was created by
+// vxlan-tracer and may be safely deleted by vxlan-tracer during cleanup.
+// Filters at any other priority or handle are never touched.
+const (
+	vxlanTracerPriority    = 50000
+	vxlanTracerHandleMajor = uint16(0x7674) // 'vt' in ASCII
+	vxlanTracerHandleMinor = uint16(0x0001)
+)
+
+// vxlanTracerHandle is the complete TC filter handle assigned to all
+// vxlan-tracer filters. netlink.MakeHandle packs major<<16 | minor.
+var vxlanTracerHandle = netlink.MakeHandle(vxlanTracerHandleMajor, vxlanTracerHandleMinor)
+
+// lockPath is the exclusive run-lock for vxlan-tracer. Only one invocation
+// may hold TC filters at a time; a second run fails with a clear error.
+const lockPath = "/run/vxlan-tracer.lock"
+
+// ownedTCFilter records one TC filter created by this Attachment.
+type ownedTCFilter struct {
+	link   netlink.Link
+	parent uint32
 }
 
-// Attachment holds everything attached by Attach, for cleanup via Close.
+// Config describes which interfaces and compiled BPF objects to attach.
+type Config struct {
+	Overlay       string // VXLAN overlay interface, e.g. vxlan0
+	Underlay      string // Underlay physical interface, e.g. eth0
+	PinDir        string // bpffs directory for pinned maps, e.g. /sys/fs/bpf/vxlan-tracer
+	TCIngressObj  string // compiled tc_ingress_eth0.bpf.o path
+	TCEgressObj   string // compiled tc_egress_vxlan0.bpf.o path
+	KprobeObj     string // compiled kprobes.bpf.o path
+	FragKprobeObj string // compiled frag_kprobes.bpf.o path (ip_do_fragment counter)
+	VXLANPort     uint16 // VXLAN UDP destination port in host byte order (0 = default 4789)
+}
+
+// Attachment holds everything attached by Attach, for deterministic cleanup
+// via Close. Close removes exactly the resources recorded here; it never
+// touches resources created by other tools.
 type Attachment struct {
 	ingressColl    *ebpf.Collection
 	egressColl     *ebpf.Collection
@@ -40,6 +78,22 @@ type Attachment struct {
 	fragKprobeLink link.Link
 	underlay       netlink.Link
 	overlay        netlink.Link
+
+	// TC filters created by this invocation. Close() removes only these.
+	ownedFilters []ownedTCFilter
+
+	// clsact qdisc ownership. Close() removes a qdisc only if we created it
+	// AND no filters remain on it after our own are removed.
+	underlayClsactCreated bool
+	overlayClsactCreated  bool
+
+	// pinDir is the bpffs directory where maps are pinned. Close() unpins
+	// all maps and removes the directory if it becomes empty.
+	pinDir string
+
+	// lockFD is the open file descriptor holding the exclusive run-lock.
+	// Closed (releasing the lock) in Close().
+	lockFD int
 }
 
 // pinnedMaps lists, per BPF object, which map names should be pinned under
@@ -51,6 +105,16 @@ var pinnedMaps = map[string][]string{
 	"fragkprobe": {"frag_events_total"},
 }
 
+// pinnedMapNames is the complete list of map file names that may exist under
+// PinDir after a successful attach. Close() removes each of these files.
+var pinnedMapNames = []string{
+	"ptb_ingress_counts",
+	"ptb_ingress_total",
+	"flow_state",
+	"icmp_rcv_total",
+	"frag_events_total",
+}
+
 // Attach loads the three compiled BPF objects, attaches them to the
 // configured interfaces / kernel function, and pins their maps under
 // cfg.PinDir. The TC clsact qdisc is created on each interface if missing.
@@ -59,27 +123,50 @@ var pinnedMaps = map[string][]string{
 // returning the error (no half-attached state is left behind by a failed
 // Attach call). Programs are pass-through (TC_ACT_OK) and the kprobe never
 // affects packet delivery, so a failed attach has no traffic-path impact.
+//
+// Only one vxlan-tracer invocation may run at a time per host. Attach
+// acquires /run/vxlan-tracer.lock before touching any kernel state and
+// releases it in Close().
 func Attach(cfg Config) (*Attachment, error) {
+	lockFD, err := acquireLock()
+	if err != nil {
+		return nil, err
+	}
+
 	underlay, err := netlink.LinkByName(cfg.Underlay)
 	if err != nil {
+		_ = syscall.Close(lockFD)
 		return nil, fmt.Errorf("lookup underlay %q: %w", cfg.Underlay, err)
 	}
 	overlay, err := netlink.LinkByName(cfg.Overlay)
 	if err != nil {
+		_ = syscall.Close(lockFD)
 		return nil, fmt.Errorf("lookup overlay %q: %w", cfg.Overlay, err)
 	}
 
-	if err := ensureClsact(underlay); err != nil {
+	underlayCreated, err := ensureClsact(underlay)
+	if err != nil {
+		_ = syscall.Close(lockFD)
 		return nil, fmt.Errorf("ensure clsact qdisc on underlay %q: %w", cfg.Underlay, err)
 	}
-	if err := ensureClsact(overlay); err != nil {
+	overlayCreated, err := ensureClsact(overlay)
+	if err != nil {
+		_ = syscall.Close(lockFD)
 		return nil, fmt.Errorf("ensure clsact qdisc on overlay %q: %w", cfg.Overlay, err)
 	}
 
-	a := &Attachment{underlay: underlay, overlay: overlay}
+	a := &Attachment{
+		underlay:              underlay,
+		overlay:               overlay,
+		underlayClsactCreated: underlayCreated,
+		overlayClsactCreated:  overlayCreated,
+		pinDir:                cfg.PinDir,
+		lockFD:                lockFD,
+	}
 
 	ingressColl, ingressProg, err := loadPinned(cfg.TCIngressObj, "tc_ingress_count_ptb", cfg.PinDir, pinnedMaps["ingress"])
 	if err != nil {
+		a.Close()
 		return nil, fmt.Errorf("load tc ingress object %s: %w", cfg.TCIngressObj, err)
 	}
 	a.ingressColl = ingressColl
@@ -87,7 +174,7 @@ func Attach(cfg Config) (*Attachment, error) {
 		a.Close()
 		return nil, fmt.Errorf("write vxlan config map: %w", err)
 	}
-	if err := attachTC(underlay, netlink.HANDLE_MIN_INGRESS, ingressProg, "tc_ingress_eth0"); err != nil {
+	if err := a.attachTC(underlay, netlink.HANDLE_MIN_INGRESS, ingressProg); err != nil {
 		a.Close()
 		return nil, fmt.Errorf("attach tc ingress on %q: %w", cfg.Underlay, err)
 	}
@@ -98,7 +185,7 @@ func Attach(cfg Config) (*Attachment, error) {
 		return nil, fmt.Errorf("load tc egress object %s: %w", cfg.TCEgressObj, err)
 	}
 	a.egressColl = egressColl
-	if err := attachTC(overlay, netlink.HANDLE_MIN_EGRESS, egressProg, "tc_egress_vxlan0"); err != nil {
+	if err := a.attachTC(overlay, netlink.HANDLE_MIN_EGRESS, egressProg); err != nil {
 		a.Close()
 		return nil, fmt.Errorf("attach tc egress on %q: %w", cfg.Overlay, err)
 	}
@@ -130,6 +217,26 @@ func Attach(cfg Config) (*Attachment, error) {
 	a.fragKprobeLink = fkp
 
 	return a, nil
+}
+
+// acquireLock opens and exclusively locks /run/vxlan-tracer.lock using
+// LOCK_EX|LOCK_NB. Returns the open fd on success. The caller must close
+// the fd to release the lock.
+func acquireLock() (int, error) {
+	fd, err := syscall.Open(lockPath, syscall.O_CREAT|syscall.O_RDWR, 0600)
+	if err != nil {
+		return -1, fmt.Errorf("open lock file %s: %w", lockPath, err)
+	}
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = syscall.Close(fd)
+		if err == syscall.EWOULDBLOCK {
+			return -1, fmt.Errorf(
+				"another vxlan-tracer invocation is already running (lock held by %s); "+
+					"wait for it to exit or kill it first", lockPath)
+		}
+		return -1, fmt.Errorf("acquire lock %s: %w", lockPath, err)
+	}
+	return fd, nil
 }
 
 // vxlanCfgVal mirrors struct vxlan_cfg in bpf/maps.h.
@@ -172,26 +279,31 @@ func writeVXLANPortToMaps(maps map[string]*ebpf.Map, portHost uint16) error {
 }
 
 // ensureClsact creates a clsact qdisc on l if one does not already exist.
+// Returns (true, nil) if it created a new qdisc, (false, nil) if one was
+// already present, or (false, err) on failure.
 // clsact is required before TC BPF filters can be attached at ingress or
 // egress.
-func ensureClsact(l netlink.Link) error {
+func ensureClsact(l netlink.Link) (created bool, err error) {
 	qdiscs, err := netlink.QdiscList(l)
 	if err != nil {
-		return fmt.Errorf("list qdiscs: %w", err)
+		return false, fmt.Errorf("list qdiscs: %w", err)
 	}
 	for _, q := range qdiscs {
 		if q.Type() == "clsact" {
-			return nil
+			return false, nil // pre-existing; do not remove on cleanup
 		}
 	}
-	return netlink.QdiscAdd(&netlink.GenericQdisc{
+	if err := netlink.QdiscAdd(&netlink.GenericQdisc{
 		QdiscAttrs: netlink.QdiscAttrs{
 			LinkIndex: l.Attrs().Index,
 			Handle:    netlink.MakeHandle(0xffff, 0),
 			Parent:    netlink.HANDLE_CLSACT,
 		},
 		QdiscType: "clsact",
-	})
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // loadPinned loads the BPF object at objPath, marks pinNames for pinning
@@ -224,33 +336,46 @@ func loadPinned(objPath, progName, pinDir string, pinNames []string) (*ebpf.Coll
 // attachTC attaches prog as a direct-action TC BPF filter at the given
 // clsact parent (HANDLE_MIN_INGRESS or HANDLE_MIN_EGRESS) on l.
 //
-// Any existing filter at priority 1 is removed before adding the new one, so
-// re-running the binary in the same lab after a prior run's TC filters
-// persisted does not fail with EEXIST. This makes binary restarts idempotent
-// without requiring a manual cleanup step between runs.
-func attachTC(l netlink.Link, parent uint32, prog *ebpf.Program, name string) error {
-	// Delete any priority-1 filter left by a prior run before adding ours.
-	// A failure here is non-fatal: FilterAdd will still report EEXIST clearly.
+// Safety contract:
+//   - Only filters at vxlanTracerPriority (50000) with vxlanTracerHandleMajor
+//     (0x7674) are ever deleted. Filters at any other priority or handle are
+//     never touched, regardless of which tool created them.
+//   - The new filter is always installed at priority 50000, handle 0x7674_0001,
+//     so it never occupies the priority ranges used by Cilium, Calico, or
+//     operator-created classifiers.
+//   - The created filter is recorded in a.ownedFilters so Close() can remove it.
+func (a *Attachment) attachTC(l netlink.Link, parent uint32, prog *ebpf.Program) error {
+	// Remove any previously installed vxlan-tracer filter at this parent
+	// (left over from a prior run that was killed without cleanup). Only touch
+	// filters whose priority AND handle major match our reserved values.
 	if existing, err := netlink.FilterList(l, parent); err == nil {
 		for _, f := range existing {
-			if f.Attrs().Priority == 1 {
+			attrs := f.Attrs()
+			if attrs.Priority == vxlanTracerPriority &&
+				uint16(attrs.Handle>>16) == vxlanTracerHandleMajor {
 				_ = netlink.FilterDel(f)
 			}
 		}
 	}
+
+	name := fmt.Sprintf("vt_%.13s", l.Attrs().Name) // 16-char kernel BPF name limit: "vt_" + up to 13
 	filter := &netlink.BpfFilter{
 		FilterAttrs: netlink.FilterAttrs{
 			LinkIndex: l.Attrs().Index,
 			Parent:    parent,
-			Handle:    netlink.MakeHandle(0, 1),
+			Handle:    vxlanTracerHandle,
 			Protocol:  unix.ETH_P_ALL,
-			Priority:  1,
+			Priority:  vxlanTracerPriority,
 		},
 		Fd:           prog.FD(),
 		Name:         name,
 		DirectAction: true,
 	}
-	return netlink.FilterAdd(filter)
+	if err := netlink.FilterAdd(filter); err != nil {
+		return err
+	}
+	a.ownedFilters = append(a.ownedFilters, ownedTCFilter{link: l, parent: parent})
+	return nil
 }
 
 // MTUs returns the current overlay and underlay interface MTUs, re-read at
@@ -269,35 +394,106 @@ func (a *Attachment) MTUs() (overlayMTU, underlayMTU int, err error) {
 	return o.Attrs().MTU, u.Attrs().MTU, nil
 }
 
-// Close detaches the kprobes (which have no persistence outside this
-// process) and closes all collection file descriptors. TC filters survive
-// Close, matching the existing shell-attach behavior documented in
-// docs/map-lifecycle.md: TC filters persist on the qdisc once attached;
-// only the kprobe links need an explicit owner to stay alive. Pinned maps
-// are not removed — they are meant to outlive the loader process.
+// Close performs deterministic cleanup in this order:
+//  1. Kprobe links (die when FD closes; no persistence).
+//  2. BPF collections (program and map FDs).
+//  3. TC filters created by this invocation (identified by priority 50000 +
+//     handle major 0x7674). Filters at any other priority are never touched.
+//  4. clsact qdiscs, but only if (a) we created them AND (b) no remaining
+//     filters exist on the qdisc after our own are removed.
+//  5. Pinned map files under pinDir.
+//  6. Pin directory, if now empty.
+//  7. Run lock.
+//
+// Close is safe to call on a partially-initialised Attachment (nil checks
+// throughout). It collects and returns the first error encountered without
+// stopping; all cleanup steps run regardless.
 func (a *Attachment) Close() error {
 	var firstErr error
-	if a.fragKprobeLink != nil {
-		if err := a.fragKprobeLink.Close(); err != nil && firstErr == nil {
+
+	record := func(err error) {
+		if err != nil && firstErr == nil {
 			firstErr = err
 		}
+	}
+
+	// 1. Kprobe links.
+	if a.fragKprobeLink != nil {
+		record(a.fragKprobeLink.Close())
 	}
 	if a.fragKprobeColl != nil {
 		a.fragKprobeColl.Close()
 	}
 	if a.kprobeLink != nil {
-		if err := a.kprobeLink.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		record(a.kprobeLink.Close())
 	}
 	if a.kprobeColl != nil {
 		a.kprobeColl.Close()
 	}
+
+	// 2. BPF collections (TC programs).
 	if a.egressColl != nil {
 		a.egressColl.Close()
 	}
 	if a.ingressColl != nil {
 		a.ingressColl.Close()
 	}
+
+	// 3. TC filters owned by this invocation.
+	for _, f := range a.ownedFilters {
+		filter := &netlink.BpfFilter{
+			FilterAttrs: netlink.FilterAttrs{
+				LinkIndex: f.link.Attrs().Index,
+				Parent:    f.parent,
+				Handle:    vxlanTracerHandle,
+				Protocol:  unix.ETH_P_ALL,
+				Priority:  vxlanTracerPriority,
+			},
+		}
+		record(netlink.FilterDel(filter))
+	}
+
+	// 4. clsact qdiscs we created, if now empty.
+	if a.underlayClsactCreated && a.underlay != nil {
+		maybeRemoveClsact(a.underlay)
+	}
+	if a.overlayClsactCreated && a.overlay != nil {
+		maybeRemoveClsact(a.overlay)
+	}
+
+	// 5–6. Pinned maps and pin directory.
+	if a.pinDir != "" {
+		for _, name := range pinnedMapNames {
+			_ = os.Remove(filepath.Join(a.pinDir, name))
+		}
+		_ = os.Remove(a.pinDir) // succeeds only if directory is now empty
+	}
+
+	// 7. Run lock.
+	if a.lockFD >= 0 {
+		_ = syscall.Flock(a.lockFD, syscall.LOCK_UN)
+		_ = syscall.Close(a.lockFD)
+		a.lockFD = -1
+	}
+
 	return firstErr
+}
+
+// maybeRemoveClsact removes the clsact qdisc from l only if no filters remain
+// on it. This avoids removing a qdisc that another tool has added filters to
+// during our run.
+func maybeRemoveClsact(l netlink.Link) {
+	ingress, _ := netlink.FilterList(l, netlink.HANDLE_MIN_INGRESS)
+	egress, _ := netlink.FilterList(l, netlink.HANDLE_MIN_EGRESS)
+	if len(ingress) > 0 || len(egress) > 0 {
+		return
+	}
+	_ = netlink.QdiscDel(&netlink.GenericQdisc{
+		QdiscAttrs: netlink.QdiscAttrs{
+			LinkIndex: l.Attrs().Index,
+			Handle:    netlink.MakeHandle(0xffff, 0),
+			Parent:    netlink.HANDLE_CLSACT,
+		},
+		QdiscType: "clsact",
+	})
 }

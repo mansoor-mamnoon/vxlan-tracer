@@ -2,7 +2,7 @@ package diag
 
 import "fmt"
 
-// Verdict is one of the five outcomes vxlan-tracer can report for a single
+// Verdict is one of the six outcomes vxlan-tracer can report for a single
 // observation window. Wording on every Diagnosis.Message is deliberately
 // conservative — see docs/forbidden-claims.md, in particular claim #2
 // (no inner 5-tuple from a PTB) and claim #5 (this tool does not detect all
