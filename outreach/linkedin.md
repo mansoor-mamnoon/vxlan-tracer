@@ -8,7 +8,7 @@
 
 If you've ever watched `kubectl cp` hang silently while small requests work fine, you've probably hit a VXLAN MTU blackhole.
 
-VXLAN adds 50 bytes of overhead per packet. If the overlay MTU isn't reduced to account for that, oversized packets get silently dropped by cloud fabric — and no error ever appears in your logs.
+VXLAN adds 50 bytes of overhead per packet. If the overlay MTU isn't reduced to account for that, oversized packets may be fragmented or dropped — with no error in your application logs.
 
 I built vxlan-tracer to diagnose this. It uses eBPF (TC sched_cls + kprobes) to count fragmentation events and PTB (ICMP "packet too big") suppression at the kernel level. In under a minute it tells you which of these is happening:
 

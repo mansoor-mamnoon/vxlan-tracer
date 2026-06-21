@@ -12,7 +12,7 @@
 
 Built a small eBPF diagnostic for a problem I kept hitting: in Kubernetes clusters using VXLAN overlays, small requests work fine but large transfers (kubectl cp, big API responses, file downloads) silently hang.
 
-The root cause is almost always MTU misconfiguration. VXLAN encapsulation adds 50 bytes of overhead; if the overlay MTU is left at 1500 to match the underlay, every large packet triggers fragmentation — and fragmented VXLAN UDP is commonly dropped silently by cloud VPC routing.
+One common root cause is MTU misconfiguration. VXLAN encapsulation adds 50 bytes of overhead; if the overlay MTU is left at 1500 to match the underlay, every large packet triggers fragmentation — and fragmented IP packets may be dropped or mishandled depending on the network path.
 
 **vxlan-tracer** attaches eBPF to the VXLAN overlay egress and underlay ingress, plus kprobes on `ip_do_fragment` and `icmp_rcv`, and tells you which scenario you're in:
 

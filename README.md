@@ -88,8 +88,8 @@ Kernel functions:
 ```
 
 Linux VXLAN defaults to DF=0 on the outer IP header, so oversized outer packets
-are fragmented rather than PTB-signaled. Fragmented VXLAN UDP is typically
-silently dropped by cloud provider fabric and AWS/GCP/Azure VPC routing.
+are fragmented rather than PTB-signaled. Fragmented IP packets may be dropped or
+mishandled by networks and middleboxes depending on path configuration.
 `ip_do_fragment` detection is therefore required for the tool to be useful on
 default Flannel/Calico VXLAN deployments.
 
@@ -174,11 +174,11 @@ sudo vxlan-tracer --overlay vxlan0 --underlay eth0 --json
 | Stale BPF integration test | done — `make test-stale-bpf`; CI step in x86-smoke.yml |
 | CI test suite | done — x86-smoke.yml + arm-smoke.yml on GitHub Actions |
 
-All five verdicts (PTB_DELIVERED, PTB_SUPPRESSED, VXLAN_FRAGMENTATION_OBSERVED,
-VXLAN_MTU_MISCONFIGURATION, NO_ISSUE_OBSERVED) are reachable through the actual
-Go binary. PTB paths proven in Day 5; DF=0 fragmentation path proven in Day 6;
-automated scenario runner (4/4 pass, idempotent reruns) proven in Day 7 —
-see `evidence/` directory.
+All six verdicts (PTB_DELIVERED, PTB_SUPPRESSED, VXLAN_FRAGMENTATION_OBSERVED,
+VXLAN_MTU_RISK, VXLAN_MTU_MISCONFIGURATION, NO_ISSUE_OBSERVED) are reachable
+through the actual Go binary. PTB paths proven in Day 5; DF=0 fragmentation path
+proven in Day 6; automated scenario runner (4/4 pass, idempotent reruns) proven
+in Day 7 — see `evidence/` directory.
 
 ## Demo: proven JSON outputs
 
@@ -208,7 +208,7 @@ The following outputs were captured from a running Docker container
 ```json
 {
   "verdict": "VXLAN_FRAGMENTATION_OBSERVED",
-  "message": "6 ip_do_fragment invocation(s) were observed while vxlan-tracer was attached; concurrently, the TC egress hook recorded an outer packet length of 1438 bytes, 38 bytes over the underlay MTU (1400). Fragmentation was observed while oversized VXLAN traffic was present — these two signals together are consistent with VXLAN outer packets triggering ip_do_fragment. Note: ip_do_fragment is a global kernel function and may include non-VXLAN fragmentation events on a busy host. Fragmented VXLAN UDP is commonly dropped silently by cloud fabric; in a local lab fragments may reassemble — fragmentation observed here does not by itself confirm packet loss.",
+  "message": "6 ip_do_fragment invocation(s) were observed while vxlan-tracer was attached; concurrently, the TC egress hook recorded an outer packet length of 1438 bytes, 38 bytes over the underlay MTU (1400). Fragmentation was observed while oversized VXLAN traffic was present — these two signals together are consistent with VXLAN outer packets triggering ip_do_fragment. Note: ip_do_fragment is a global kernel function and may include non-VXLAN fragmentation events on a busy host. Fragmented IP packets may be dropped or mishandled by networks and middleboxes; in a local lab fragments may reassemble — fragmentation observed here does not by itself confirm packet loss.",
   "overlay": "vxlan0",
   "underlay": "veth1",
   "overlay_mtu": 1450,
@@ -267,7 +267,7 @@ See `docs/fragmentation-scoping.md` for the five scoping options considered and 
 - All three kernels produce identical verdicts and JSON field values
 
 **BPF / kprobe / CO-RE:**
-- All five verdict paths execute end-to-end via `scripts/run-scenarios.sh` on all 3 kernels
+- All six verdict paths execute end-to-end via `scripts/run-scenarios.sh` on all 3 kernels
 - BPF verifier accepts all four programs on all 3 kernels
 - CO-RE BTF relocation resolves `skb->len` correctly on all 3 kernels
 - ip_do_fragment kprobe attaches and counts correctly on all 3 kernels

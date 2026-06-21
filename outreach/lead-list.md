@@ -286,11 +286,11 @@ may benefit from vxlan-tracer as a diagnostic tool.
 - **project/community:** Calico
 - **exact_symptom:** When using Calico CNI, the MTU of the pod veth NIC is set to 1500 with random probability instead of correct 1400 (eth0 MTU 1450 − 50 byte VXLAN overhead). Causes intermittent large packet drops.
 - **environment:** Calico VXLAN, Kubernetes, Linux
-- **vxlan_tracer_relevance:** VXLAN_MTU_MISCONFIGURATION — vxlan-tracer can run per-pod to check which pods have wrong MTU and whether those produce fragmentation events.
-- **confidence:** high
+- **vxlan_tracer_relevance:** VXLAN_MTU_MISCONFIGURATION — vxlan-tracer checks the VXLAN overlay interface MTU and whether active fragmentation is occurring. It does not enumerate per-pod veth MTUs; that requires per-pod inspection outside this tool's scope. The VXLAN_MTU_MISCONFIGURATION verdict would confirm if the overlay-level MTU is wrong; a follow-up `ip link show` per pod would confirm the per-pod veth MTU.
+- **confidence:** medium (tool is relevant but cannot directly confirm the per-pod veth race condition)
 - **active:** yes
 - **contact_method:** issue reply
-- **suggested_opening:** vxlan-tracer can run per-pod to check which pods have veth MTU 1500 vs. 1400 and whether those with 1500 are producing fragmented or dropped traffic — quick pass/fail diagnostic.
+- **suggested_opening:** vxlan-tracer can confirm whether the VXLAN overlay interface MTU is also misconfigured (which often accompanies wrong veth MTU), and whether active fragmentation is happening on the VXLAN path. For per-pod veth MTU, you would still need `ip link show` in each pod netns.
 - **risks:** Race condition in Calico's CNI plugin; vxlan-tracer useful for triaging, not preventing.
 
 ---
@@ -402,7 +402,7 @@ may benefit from vxlan-tracer as a diagnostic tool.
 - **confidence:** medium
 - **active:** unknown
 - **contact_method:** issue reply
-- **suggested_opening:** vxlan-tracer can scan your veth interface MTU vs. outer VXLAN MTU to confirm whether the misconfiguration is the active root cause of your packet drops.
+- **suggested_opening:** vxlan-tracer checks the VXLAN overlay interface MTU and whether active fragmentation is occurring — it would tell you whether the VXLAN overlay level is misconfigured, even without knowing the per-veth MTU (veth inspection requires per-pod commands outside this tool's scope).
 - **risks:** Rancher 1.x vs. 2.x difference; issue may be from EOL version.
 
 ---

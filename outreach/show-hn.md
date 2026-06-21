@@ -14,15 +14,16 @@
 
 Small eBPF diagnostic for a specific frustrating problem: Kubernetes clusters where ping works, small requests work, but large transfers (kubectl cp, big HTTP responses, file downloads) silently hang or stall after a few kilobytes.
 
-The root cause is usually VXLAN MTU misconfiguration. VXLAN adds 50 bytes of overhead per packet; if the overlay MTU isn't reduced to account for that, oversized outer packets get either fragmented (and then silently dropped by cloud fabric) or trigger ICMP "fragmentation needed" (PTB) messages that are suppressed by firewalls or eBPF policies before they can reach the pod.
+One common root cause is VXLAN MTU misconfiguration. VXLAN adds 50 bytes of overhead per packet; if the overlay MTU isn't reduced to account for that, oversized outer packets get either fragmented (fragmented IP packets may be dropped or mishandled depending on the network path) or trigger ICMP "fragmentation needed" (PTB) messages that are suppressed by firewalls or eBPF policies before they can reach the pod.
 
-vxlan-tracer attaches TC sched_cls hooks on the underlay ingress path (fires before netfilter) and on the VXLAN overlay egress (fires before encapsulation), plus kprobes on `ip_do_fragment` and `icmp_rcv`. The counter comparison across these hooks produces one of five verdicts:
+vxlan-tracer attaches TC sched_cls hooks on the underlay ingress path (fires before netfilter) and on the VXLAN overlay egress (fires before VXLAN encapsulation), plus kprobes on `ip_do_fragment` and `icmp_rcv`. The counter comparison across these hooks produces one of six verdicts:
 
-- `VXLAN_FRAGMENTATION_OBSERVED` — fragmentation is actively occurring (corroborated by TC egress seeing oversized outer packets)
-- `PTB_SUPPRESSED` — PTBs arrived at the NIC but were dropped before reaching `icmp_rcv`
-- `PTB_DELIVERED` — PTBs are reaching the kernel's ICMP handler
-- `VXLAN_MTU_MISCONFIGURATION` — static risk detected (overlay MTU > underlay MTU − 50), no active events needed
-- `NO_ISSUE_OBSERVED` — nothing detected in the window
+- `VXLAN_FRAGMENTATION_OBSERVED` — ip_do_fragment fired with corroborating TC egress signal; consistent with VXLAN-triggered fragmentation
+- `PTB_SUPPRESSED` — PTBs observed at TC ingress (before netfilter) but absent at `icmp_rcv` (after netfilter); consistent with firewall/policy suppression
+- `PTB_DELIVERED` — PTBs observed at TC ingress and confirmed at `icmp_rcv`
+- `VXLAN_MTU_RISK` — oversized inner packets observed at TC egress with no fragmentation signal; consistent with MTU risk (note: may be a GSO super-packet false positive)
+- `VXLAN_MTU_MISCONFIGURATION` — overlay MTU > underlay MTU − 50 bytes; static configuration risk, no active events required
+- `NO_ISSUE_OBSERVED` — no relevant signal in this observation window
 
 New: `vxlan-tracer interfaces` (no root required) enumerates VXLAN interfaces on the host with their VNI, port, MTU, and inferred underlay — so you don't have to guess interface names.
 

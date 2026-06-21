@@ -30,8 +30,8 @@
 
 - **issue:** https://github.com/projectcalico/calico/issues/9718
 - **score:** 11/12 (symptom 3, recency 3, response 3, environment 2)
-- **why second:** January 2025, intermittent nature (random probability of wrong MTU) means the reporter is likely still fighting this. VXLAN_MTU_MISCONFIGURATION is an exact match. vxlan-tracer can provide per-pod MTU validation which no other tool surfaces cleanly.
-- **approach:** Reply noting that vxlan-tracer's interfaces subcommand can enumerate which pods have misconfigured veth MTU, and the diagnostic verdict will confirm whether those pods are actively producing fragmentation.
+- **why second:** January 2025, intermittent nature (random probability of wrong MTU) means the reporter is likely still fighting this. VXLAN_MTU_MISCONFIGURATION is an exact match.
+- **approach:** Reply noting that vxlan-tracer's interfaces subcommand enumerates VXLAN overlay interfaces and their MTU (does NOT scan pod veth interfaces — veth enumeration requires per-pod inspection that this tool does not do). The diagnostic verdict confirms whether active fragmentation is occurring at the VXLAN overlay level.
 - **key personalization:** Reference the specific 1500 vs. 1400 boundary and the random probability nature of the bug.
 
 ---

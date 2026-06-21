@@ -26,16 +26,18 @@ The reason is VXLAN encapsulation overhead. A VXLAN outer frame is 50 bytes larg
 
 What happens next depends on the DF (Don't Fragment) bit on the outer IP header:
 
-- **DF=0 (Linux VXLAN default):** The kernel fragments the oversized packet. Fragmented UDP VXLAN is commonly dropped silently by cloud fabric (AWS VPC, GCP VPC, Azure VNET). In a local lab, fragments may reassemble — but in cloud environments they're gone.
-- **DF=1 (ICMP PTB path):** The underlay router generates an ICMP "fragmentation needed" (PTB) message back to the sender. If the PTB reaches the kernel, PMTUD kicks in and the sender reduces its segment size. If the PTB is dropped (by a firewall, a netfilter rule, or an eBPF policy), the sender never gets the signal and keeps retrying the same oversized packet until the TCP retransmit timeout fires (60 seconds of silence).
+- **DF=0 (Linux VXLAN default):** The kernel fragments the oversized packet. Fragmented IP packets may be dropped or mishandled by networks and middleboxes — in a local lab, fragments may reassemble successfully, but this cannot be assumed for all paths.
+- **DF=1 (ICMP PTB path):** The underlay router generates an ICMP "fragmentation needed" (PTB) message back to the sender. If the PTB reaches the kernel, PMTUD kicks in and the sender reduces its segment size. If the PTB is dropped (by a firewall, a netfilter rule, or an eBPF policy), the sender never gets the signal and keeps retrying the same oversized packet until TCP times out — a window that can be tens of seconds depending on retransmit configuration.
 
 Both paths produce silent packet loss. The DF=0 path is harder to diagnose because it doesn't even generate a PTB — you need to observe the fragmentation event itself.
 
 ---
 
-### Why standard tools don't catch this
+### Why standard tools don't give a complete picture
 
-`tcpdump` can capture PTBs, but it runs post-netfilter for AF_PACKET sockets. A PTB that was dropped by an iptables INPUT rule won't appear in a tcpdump capture on the same interface it arrived on. You'd need a raw socket or XDP hook to capture it pre-netfilter, which is non-trivial to set up on a live node.
+`tcpdump` via AF_PACKET fires before netfilter on ingress, so it CAN see an incoming PTB even if iptables subsequently drops it. A well-placed `tcpdump -i eth0 "icmp[0] == 3 and icmp[1] == 4"` can confirm a PTB arrived at the NIC. What tcpdump cannot tell you in a Kubernetes environment is whether the PTB was subsequently processed by `icmp_rcv` or silently dropped — you would need to run two separate captures simultaneously (pre-netfilter and post-netfilter) and correlate the counts, which is non-trivial to do reliably on a live node.
+
+vxlan-tracer's value over a manual tcpdump workflow is: (1) automated simultaneous measurement at two observation points — TC ingress (before netfilter) and `icmp_rcv` (after netfilter); (2) structured verdict generation instead of manual log correlation; (3) persistent attachment across the full diagnostic window without human interaction.
 
 `ip -s link show` shows general interface statistics including drops, but doesn't distinguish between PTB drops and other drop causes.
 
@@ -54,7 +56,9 @@ The core insight is that an ICMP "fragmentation needed" message passes through t
 
 If count(1) > 0 and count(2) = 0, something between the NIC and `icmp_rcv` is dropping the PTB. This is the `PTB_SUPPRESSED` verdict.
 
-For the DF=0 fragmentation path, there's no PTB, but there is `ip_do_fragment` — the kernel function that fragments packets when DF=0. A kprobe on this function fires every time a packet is fragmented. Separately, the TC egress hook on the VXLAN overlay interface records the outer packet size before encapsulation. When both `ip_do_fragment` fires AND the outer packet size exceeds the underlay MTU, the two signals together indicate `VXLAN_FRAGMENTATION_OBSERVED` with corroborated scope.
+For the DF=0 fragmentation path, there's no PTB, but there is `ip_do_fragment` — the kernel function that fragments packets when DF=0. A kprobe on this function fires every time a packet is fragmented. Separately, the TC egress hook on the VXLAN overlay interface records the inner IP packet size at the vxlan0 egress (before VXLAN encapsulation adds its UDP+IP+VXLAN header overhead). When both `ip_do_fragment` fires AND the inner packet size indicates the outer encapsulated packet would exceed the underlay MTU, the two signals together indicate `VXLAN_FRAGMENTATION_OBSERVED` with corroborated scope.
+
+Note: on hosts with GSO (Generic Segmentation Offload) enabled on the overlay NIC, the inner packet size observed at TC egress may reflect a GSO super-packet rather than a wire-sized frame. This can cause a false `VXLAN_MTU_RISK` signal. The `VXLAN_FRAGMENTATION_OBSERVED` verdict (via `ip_do_fragment`) is not affected by GSO. See `docs/gso-gro-limitations.md`.
 
 ---
 

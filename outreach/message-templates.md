@@ -14,7 +14,7 @@ For issues where the reporter describes:
 - Firewall or eBPF policy dropping ICMP type 3 code 4
 - Large packets not triggering any PTB response
 
-> I'm working on [vxlan-tracer](https://github.com/mansoor-mamnoon/vxlan-tracer), a small eBPF diagnostic tool for exactly this class of problem. It attaches a TC sched_cls hook on the underlay ingress path (before netfilter) and a kprobe on `icmp_rcv` (after netfilter), and compares the two counts. If TC > 0 and `icmp_rcv` = 0, it reports `PTB_SUPPRESSED` — meaning the PTB arrived at the NIC but was dropped before the kernel could act on it. That gap between the two hooks is where your [firewall/policy] drop would show up.
+> I'm working on [vxlan-tracer](https://github.com/mansoor-mamnoon/vxlan-tracer), a small eBPF diagnostic tool for this class of problem. It attaches a TC sched_cls hook on the underlay ingress path (fires before netfilter) and a kprobe on `icmp_rcv` (fires after netfilter), and compares the two counts. If TC count > 0 and `icmp_rcv` count = 0, it reports `PTB_SUPPRESSED` — the signal is consistent with a drop between those two observation points (typically a firewall rule or eBPF policy). It doesn't identify which specific rule or code path is responsible, but it narrows the observation window considerably.
 >
 > It's an experimental prerelease, lab-validated on kernels 5.15–6.8 (amd64 and arm64), not yet tested against a real [CNI] cluster. If you're on a staging or non-critical node and want to try it, the amd64/arm64 binaries are at [releases page].
 >
@@ -66,13 +66,11 @@ For issues where the reporter describes:
 ### Draft 2 — PC02: Calico random veth MTU 1500 instead of 1400
 **Target:** https://github.com/projectcalico/calico/issues/9718
 
-> The random-probability MTU assignment you described (veth MTU 1500 when it should be 1400) is a good use case for vxlan-tracer's `interfaces` subcommand.
+> The random-probability MTU assignment you described (veth MTU 1500 when it should be 1400) is a real VXLAN MTU issue that vxlan-tracer is designed to help diagnose — though with one important caveat: `vxlan-tracer interfaces` enumerates VXLAN overlay interfaces (like `vxlan.calico`), not pod veth interfaces. It won't directly enumerate which pods have wrong veth MTU; that requires per-pod `ip link show` in each netns.
 >
-> `vxlan-tracer interfaces` lists all VXLAN-type interfaces on the host with their MTU and inferred underlay — no root required. On the affected nodes, you could run it to spot which interfaces have MTU 1500 (wrong) vs. 1400 (correct) before running the full diagnostic. The diagnostic itself would then confirm whether those 1500-MTU interfaces are actively producing fragmentation events via `ip_do_fragment`.
+> What it can do: confirm whether the VXLAN overlay interface itself has the correct MTU, and — if you can trigger the 1500-MTU veth race condition — detect whether the misconfigured veth is causing active fragmentation at the VXLAN overlay level via `ip_do_fragment`. A `VXLAN_MISCONFIGURATION` or `VXLAN_FRAGMENTATION_OBSERVED` result would give you a clear signal that the misconfiguration is actively causing packet loss.
 >
-> If the race condition is hard to reproduce, vxlan-tracer can at least give you a quick MTU audit across interfaces without needing to script `ip link show | grep mtu` manually.
->
-> https://github.com/mansoor-mamnoon/vxlan-tracer — experimental prerelease, not yet tested against Calico specifically, but this would be a useful first real-world run.
+> It's an experimental prerelease, not yet tested against Calico specifically. If you have a staging node with this bug reproducible, the result would be useful data either way: https://github.com/mansoor-mamnoon/vxlan-tracer
 
 ---
 
@@ -81,7 +79,7 @@ For issues where the reporter describes:
 
 > The "Error while correcting L4 checksum" drop path is interesting for vxlan-tracer's diagnostic split. It attaches both a TC sched_cls hook (pre-netfilter, pre-BPF-masquerade) and a kprobe on `icmp_rcv` (post-netfilter). If PTB messages are arriving at the NIC but getting dropped inside the eBPF masquerade SNAT path, you'd see TC ingress count > 0 with `icmp_rcv` count = 0 — the `PTB_SUPPRESSED` verdict.
 >
-> This would tell you definitively that the drop is happening between the TC hook and `icmp_rcv`, which is exactly the layer where your SNAT checksum correction runs. It wouldn't fix the Cilium bug, but it would narrow the bug to a specific code path and give you a reproducible test condition.
+> This would give you a signal consistent with a drop between the TC hook and `icmp_rcv` — that layer overlaps with where your SNAT/masquerade checksum path runs, though the tool does not identify the specific kernel code path responsible. It wouldn't fix the Cilium bug, but it would give you a reproducible measurement of whether PTBs are being suppressed in that window.
 >
 > If you have a Cilium node you can test on, vxlan-tracer is at https://github.com/mansoor-mamnoon/vxlan-tracer (experimental prerelease, 5.15–6.8 kernels, amd64 and arm64).
 
@@ -90,9 +88,9 @@ For issues where the reporter describes:
 ### Draft 4 — PC04: KubeVirt slow VM throughput ~80 Mbit/s
 **Target:** https://github.com/kubevirt/kubevirt/issues/11646
 
-> 80 Mbit/s is a suspiciously specific ceiling for a network performance issue — that throughput range is often consistent with a PMTUD black hole where large packets are being silently dropped and the TCP sender falls back to a small retransmit window. The symptom pattern (not a percentage slowdown, but a hard ceiling) is characteristic.
+> The hard throughput ceiling you're describing is consistent with several causes — PMTUD blackhole is one hypothesis, where large packets are silently dropped and TCP falls back to a small window. Whether that's actually happening at the VXLAN layer is something vxlan-tracer can test: if `ip_do_fragment` fires during a large transfer through the VXLAN path, the tool reports `VXLAN_FRAGMENTATION_OBSERVED`. If it doesn't, that one cause is less likely, though a negative result doesn't definitively rule it out (no relevant signal in the window isn't the same as definitively no problem).
 >
-> vxlan-tracer can rule this in or out in under a minute: if `ip_do_fragment` fires during a large transfer through the VXLAN path, the tool reports `VXLAN_FRAGMENTATION_OBSERVED`. If it doesn't, you can eliminate VXLAN MTU as the throughput ceiling and focus elsewhere.
+> I'd present this as one diagnostic check among several, not a definitive test.
 >
 > It's an experimental prerelease, validated on 5.15–6.8 kernels. KubeVirt with Multus would be a novel environment for the matrix. If you run it: https://github.com/mansoor-mamnoon/vxlan-tracer
 
@@ -112,11 +110,14 @@ For issues where the reporter describes:
 ### Draft 6 — PC06: Calico eBPF + VXLAN + GRO, GSO size not adjusted
 **Target:** https://github.com/projectcalico/calico/issues/11160
 
-> The BPF_F_ADJ_ROOM_FIXED_GSO interaction you're describing means GRO-recombined packets arrive at the VXLAN encap point without GSO size adjustment — they're super-MTU at the TC egress hook.
->
-> vxlan-tracer's TC egress hook is attached at exactly that point on the VXLAN overlay egress path. It records the outer packet size seen at the hook. If GRO-recombined packets are causing the issue, the hook would report `max_outer_ip_len` significantly above the underlay MTU, and `ip_do_fragment` would be firing at high frequency. The combined verdict would be `VXLAN_FRAGMENTATION_OBSERVED` with `fragmentation_scope: global_corroborated`.
->
-> This would give you packet-level evidence from the TC layer to go alongside the BPF verifier/program analysis. If you want to try it: https://github.com/mansoor-mamnoon/vxlan-tracer (experimental prerelease, 5.15–6.8 kernels, amd64 + arm64).
+**STATUS: DO NOT USE IN RC2** — GRO/GSO interaction at the TC egress hook is not
+adequately characterized. The TC egress hook may observe GSO super-packets rather
+than wire-sized frames, making MTU observations unreliable for this exact class of
+problem. See `docs/gso-gro-limitations.md`. This draft should only be used after
+GSO detection or qualification is implemented (rc3 or later).
+
+<!-- DRAFT (held for post-rc2) — DO NOT SEND -->
+> [Draft withheld — GRO/GSO characterization pending. See docs/gso-gro-limitations.md]
 
 ---
 
