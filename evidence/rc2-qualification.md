@@ -10,24 +10,33 @@
 
 | Change | Status |
 |--------|--------|
-| Ownership-safe TC attachment (priority 50000, handle 0x7674) | Implemented |
-| Deterministic cleanup (TC filters, maps, qdiscs, lock) | Implemented |
-| Concurrent-run lock (/run/vxlan-tracer.lock) | Implemented |
-| Filter name reflects actual interface name | Implemented |
-| `ensureClsact()` tracks pre-existing qdiscs | Implemented |
-| `vxlan-tracer interfaces` subcommand | Implemented |
-| `vxlan-tracer collect-support` subcommand (static) | Implemented |
-| `--keep-state` flag (skip cleanup) | Implemented |
-| GitHub issue templates | Implemented |
-| README "Looking for design partners" section | Implemented |
-| docs/tc-lifecycle-audit.md | Implemented |
-| docs/gso-gro-limitations.md | Implemented |
-| Verdict count corrected from five to six everywhere | Implemented |
-| Overconfident cloud-drop claims corrected | Implemented |
-| tcpdump claim in technical article corrected | Implemented |
-| veth MTU claims in outreach corrected | Implemented |
-| Demo recording plan updated for netns usage | Implemented |
-| Preflight.sh: scapy demoted from FAIL to WARN | Implemented |
+| Attachment created before first mutation; partial clsact rollback fixed | Implemented |
+| TC slot collision check: no auto-delete; fail with clear error | Implemented |
+| Exact filter identity stored (handle, prio, name, progID) after FilterAdd | Implemented |
+| Close() verifies identity before deleting; warns if identity changed | Implemented |
+| Close() idempotent: second call is no-op | Implemented |
+| `vxlan-tracer cleanup` subcommand for explicit stale-filter removal | Implemented |
+| `VXLANCandidate.UnderlayInferred` bool field added to JSON | Implemented |
+| `interfaces` column header changed from UNDERLAY to LIKELY UNDERLAY | Implemented |
+| Inferred-underlay note added to `interfaces` output | Implemented |
+| PTB_SUPPRESSED / PTB_DELIVERED human output updated for priority-50000 caveat | Implemented |
+| TC priority observation limitation added to forbidden-claims.md, hook-model.md | Implemented |
+| docs/forbidden-claims.md: claims 17 (TC priority) and 18 (GSO/GRO) added | Implemented |
+| GSO/GRO verdict reliability table: VXLAN_FRAGMENTATION_OBSERVED now UNVALIDATED | Implemented |
+| collect-support renamed to collect-environment; old name kept as alias | Implemented |
+| evidence/rc2-collect-support.md: corrected to match actual implementation | Implemented |
+| evidence/rc2-gso-gro-live.md: created, status NOT RUN | Implemented |
+| loader_lifecycle_test.go: Linux integration test skeletons added | Implemented |
+| Ownership-safe TC attachment (priority 50000, handle 0x7674) | Implemented (prior) |
+| Concurrent-run lock (/run/vxlan-tracer.lock) | Implemented (prior) |
+| `ensureClsact()` tracks pre-existing qdiscs | Implemented (prior) |
+| `vxlan-tracer interfaces` subcommand | Implemented (prior) |
+| `--keep-state` flag (skip cleanup) | Implemented (prior) |
+| docs/tc-lifecycle-audit.md | Implemented (prior) |
+| Verdict count corrected from five to six everywhere | Implemented (prior) |
+| Overconfident cloud-drop claims corrected | Implemented (prior) |
+| tcpdump claim in technical article corrected | Implemented (prior) |
+| veth MTU claims in outreach corrected | Implemented (prior) |
 
 ---
 
@@ -62,7 +71,7 @@ $ bash -n scripts/preflight.sh
 | `bash -n scripts/test-tc-coexistence.sh` | PASS (syntax only) |
 | `vxlan-tracer --version` | PASS (outputs version/commit/date) |
 | `vxlan-tracer interfaces --json` | PASS on macOS (returns error, exit 2, no crash) |
-| `vxlan-tracer collect-support --dry-run` | PASS on macOS (outputs manifest, exit 0) |
+| `vxlan-tracer collect-environment --dry-run` | PASS on macOS (outputs manifest, exit 0) |
 
 ---
 
@@ -76,7 +85,7 @@ $ bash -n scripts/preflight.sh
 | amd64 cross-compile and package smoke test | Linux binary test | YES — public release |
 | arm64 cross-compile and package smoke test | Linux binary test | YES — public release |
 | k3s/Flannel two-node validation | Disposable VMs | YES — Flannel/k3s outreach |
-| `collect-support` Linux integration | Linux + root | Partial gate |
+| `collect-environment` Linux integration | Linux + root | Partial gate |
 | Preflight script Linux run | Linux | Informational |
 
 ---
@@ -120,17 +129,21 @@ Not yet computed. Will be added after Linux build + package run.
 
 | Gate | Status |
 |------|--------|
-| No deletion of unrelated TC filters | IMPLEMENTED (code review) |
-| Cleanup removes owned filters on exit | IMPLEMENTED (code review) |
-| Cleanup removes owned filters on SIGINT/SIGTERM | IMPLEMENTED (signal handler calls Close()) |
-| Failed attach leaves no TC state | IMPLEMENTED (Close() safe at any stage) |
+| Partial clsact rollback fixed | IMPLEMENTED (code review) |
+| No auto-delete of stale filters; collision error on occupied slot | IMPLEMENTED (code review) |
+| Exact filter identity stored (progID + name) | IMPLEMENTED (code review) |
+| Cleanup verifies exact identity before deleting | IMPLEMENTED (code review) |
+| Close() idempotent | IMPLEMENTED (code review) |
+| TC coexistence test cases (lifecycle suite) | NOT RUN (Linux required) |
 | Concurrent-run protection | IMPLEMENTED (flock) |
-| TC coexistence test cases A–F | NOT RUN (Linux required) |
+| interfaces: LIKELY UNDERLAY label + UnderlayInferred JSON field | IMPLEMENTED (code review) |
+| PTB output wording: priority-50000 caveat | IMPLEMENTED (code review) |
+| TC priority observation limitation in docs | IMPLEMENTED |
+| GSO/GRO verdict table: no premature "unaffected" claims | IMPLEMENTED |
+| GSO/GRO live tests | NOT RUN |
+| collect-environment rename + evidence corrected | IMPLEMENTED |
 | Six-verdict unit tests pass | PASS (macOS) |
 | amd64 package smoke test | NOT RUN |
 | arm64 package smoke test | NOT RUN |
-| `interfaces` Linux validation (10 cases) | NOT RUN |
-| `collect-support` Linux integration | NOT RUN (partial) |
+| `interfaces` Linux validation | NOT RUN |
 | k3s/Flannel two-node validation | NOT RUN |
-| Public claims audit | DONE (rc2 commits) |
-| GSO/GRO documented | DONE (docs/gso-gro-limitations.md) |

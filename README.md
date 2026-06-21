@@ -79,8 +79,8 @@ vxlan0 (overlay)
   └─ TC egress BPF      ← reads inner IP 5-tuple + pkt size before VXLAN encap
 
 eth0 / underlay (physical)
-  ├─ TC ingress BPF     ← counts ICMP PTBs arriving before netfilter (iptables)
-  └─ kprobe icmp_rcv    ← counts PTBs after netfilter (suppression = delta > 0)
+  ├─ TC ingress BPF     ← counts ICMP PTBs at TC hook (prio 50000; earlier TC programs run first)
+  └─ kprobe icmp_rcv    ← counts PTBs that reached icmp_rcv; delta vs TC = suppression signal
 
 Kernel functions:
   ├─ kprobe ip_do_fragment  ← detects outer-packet fragmentation (DF=0 default)
@@ -190,7 +190,7 @@ The following outputs were captured from a running Docker container
 ```json
 {
   "verdict": "PTB_SUPPRESSED",
-  "message": "5 ICMP type=3/code=4 packet(s) were observed at TC ingress, but 0 reached icmp_rcv: something between the NIC and icmp_rcv — commonly a netfilter/iptables DROP rule — is suppressing PTBs before the kernel can act on them.",
+  "message": "5 ICMP type=3/code=4 packet(s) were observed at vxlan-tracer's TC ingress hook, but 0 reached icmp_rcv. This is consistent with suppression between vxlan-tracer's TC observation point and icmp_rcv. Note: earlier TC programs (priority < 50000) may also drop PTBs before vxlan-tracer observes them.",
   "overlay": "vxlan0",
   "underlay": "veth1",
   "overlay_mtu": 1450,

@@ -34,16 +34,18 @@ is present before investing time in a BPF diagnostic:
 > `fragmentation_scope: global_corroborated`. This is two independent signals pointing at
 > the same location.
 >
-> **For PTB suppression:** It also measures whether any ICMP "packet too big" messages
-> are arriving at the NIC (pre-netfilter) but not reaching `icmp_rcv` (post-netfilter).
-> If there's an eBPF policy or netfilter rule between those two points suppressing PTBs,
-> you'd see `PTB_SUPPRESSED`.
+> **For PTB suppression:** It also measures whether ICMP "packet too big" messages
+> are visible at vxlan-tracer's TC ingress hook but not reaching `icmp_rcv`.
+> If the count at the TC hook exceeds the count at `icmp_rcv`, you'd see `PTB_SUPPRESSED`.
 >
 > **Important caveats:**
 > - This is an experimental prerelease, not yet tested against a real Cilium or KubeVirt
 >   environment. Your setup would be the first.
 > - It does not identify which specific code path is responsible for the fragmentation or
 >   suppression — only that a signal is present at those observation points.
+> - PTBs dropped by Cilium's TC filters (priority 1, which runs BEFORE vxlan-tracer at
+>   priority 50000) would NOT be visible to vxlan-tracer's TC hook. PTB_SUPPRESSED means
+>   "observed at vxlan-tracer's hook but not at icmp_rcv" — it does not prove Cilium dropped it.
 > - Please run it on a non-critical or staging node only.
 >
 > **On Cilium coexistence:** rc2 attaches at TC priority 50000 (not priority 1), so

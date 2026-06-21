@@ -63,16 +63,23 @@ the ICMP PTB. Reading it here gives the exact next-hop MTU.
 
 ---
 
-## Signal 4 — remote ICMP PTB arriving at underlay (before netfilter)
+## Signal 4 — remote ICMP PTB arriving at underlay (at vxlan-tracer's TC observation point)
 
 **Correct hook:** TC ingress on the underlay interface (eth0)
 
 **Why this hook:**
 TC ingress fires at step 4 in the receive path — after GRO/netif_receive_skb
-protocol demux but BEFORE netfilter PREROUTING and INPUT chains. This means
-the program sees every incoming ICMP PTB regardless of what iptables rules are
-configured. It counts PTBs where the embedded outer UDP dst port is 4789
-(confirming these are VXLAN-related).
+protocol demux but BEFORE netfilter PREROUTING and INPUT chains.
+
+**Critical priority caveat:** vxlan-tracer attaches at TC priority 50000. Any TC
+program with a lower priority number (e.g. Cilium at priority 1) runs BEFORE
+vxlan-tracer. If an earlier TC program drops or modifies a PTB, vxlan-tracer
+cannot observe it. PTB count = 0 at vxlan-tracer's hook does NOT prove no PTB
+arrived at the NIC — it only proves vxlan-tracer did not observe one. This priority
+was chosen for coexistence safety, not for pre-CNI observation.
+
+The program counts PTBs where the embedded outer UDP dst port matches the configured
+VXLAN port (confirming these are VXLAN-related).
 
 **Alternative that also works but is insufficient alone:**
 tcpdump via AF_PACKET (PF_PACKET socket) also fires before netfilter on ingress

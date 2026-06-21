@@ -23,17 +23,18 @@
 > was designed to measure.
 >
 > The tool attaches two observation points simultaneously:
-> 1. A TC sched_cls hook on the underlay ingress **before netfilter** (counts PTBs
->    arriving at the NIC)
-> 2. A kprobe on `icmp_rcv` **after netfilter** (counts PTBs that the kernel's ICMP
->    handler processes)
+> 1. A TC sched_cls hook on the underlay at priority 50000 (counts PTBs visible
+>    at this hook — PTBs dropped by Cilium's TC filters at priority 1, which run
+>    first, would NOT be visible here)
+> 2. A kprobe on `icmp_rcv` (counts PTBs that reached the kernel's ICMP handler)
 >
-> If point (1) shows PTBs arriving but point (2) shows none, the tool reports
-> `PTB_SUPPRESSED`. The signal is consistent with a drop somewhere between those
-> two observation points — the netfilter/eBPF masquerade layer runs in that window.
+> If point (1) shows PTBs but point (2) shows none, the tool reports `PTB_SUPPRESSED`.
+> The signal is consistent with suppression between these two observation points.
 >
 > I want to be clear about what the tool can and cannot tell you:
-> - It CAN tell you whether PTBs are present at the NIC and absent at icmp_rcv.
+> - It CAN tell you whether PTBs were visible at vxlan-tracer's TC hook and absent at icmp_rcv.
+> - It CANNOT tell you whether Cilium's priority-1 TC filters dropped PTBs before vxlan-tracer
+>   observed them. PTBs dropped at priority 1 would register as 0 at both observation points.
 > - It CANNOT identify which specific eBPF program or netfilter rule is responsible.
 >   That narrowing would still require Cilium-level debugging (bpftrace, Cilium monitor).
 >

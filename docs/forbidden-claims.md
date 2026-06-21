@@ -205,3 +205,39 @@ clearing (`ClearPinned`) have been tested only on kernel 6.10.14-linuxkit.
 `FilterList` behavior, ARRAY map `UpdateAny` semantics, and HASH map iteration
 during flush are all kernel-implementation details. Claim only: "tested on
 6.10.14-linuxkit aarch64."
+
+---
+
+## 17. "TC ingress hook runs before Cilium/CNI" or "TC=0 proves no PTB arrived at the NIC"
+
+**Why forbidden:** vxlan-tracer attaches its TC ingress filter at priority 50000.
+Cilium attaches at priority 1. Lower priority number = runs first in TC. Therefore
+Cilium's TC programs execute BEFORE vxlan-tracer's TC program.
+
+If Cilium (or another CNI with priority < 50000) drops or modifies a PTB, vxlan-tracer
+CANNOT observe it at its TC hook. A PTB count of 0 at the vxlan-tracer TC hook does NOT
+prove that no PTB arrived at the NIC.
+
+Forbidden phrases:
+- "TC=0 proves no PTB arrived" (it only proves vxlan-tracer didn't observe one)
+- "vxlan-tracer TC hook fires before Cilium" (the opposite is true at priority 50000)
+- "definitively localizes the drop inside Cilium" (we cannot prove causality)
+- "pre-netfilter observation" in isolation (misleads about priority ordering vs CNI)
+
+Allowed phrases:
+- "PTB was visible at vxlan-tracer's selected TC observation point"
+- "PTB did or did not reach icmp_rcv"
+- "The difference is consistent with suppression after this observation point"
+- "An earlier TC program may drop the packet before vxlan-tracer observes it"
+
+---
+
+## 18. "VXLAN_FRAGMENTATION_OBSERVED is definitely unaffected by GSO"
+
+**Why forbidden:** While `ip_do_fragment` is expected to fire after GSO segmentation,
+the interaction between GSO, the TC size corroboration signal, and `ip_do_fragment`
+under all offload combinations has not been validated with live tests.
+
+Do not claim any verdict is "unaffected by GSO" until `evidence/rc2-gso-gro-live.md`
+contains actual live test results showing that claim. See `docs/gso-gro-limitations.md`
+for the current status.
