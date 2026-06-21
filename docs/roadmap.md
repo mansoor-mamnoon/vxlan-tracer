@@ -119,6 +119,10 @@ namespace environment. No production deployment required.
 - [x] evidence/day-15-human-output.md (Day 15)
 - [x] evidence/day-15-amd64-package-smoke.md (Day 15)
 - [x] evidence/day-15-arm64-package-smoke.md (Day 15)
+- [x] v0.1.0-rc1 qualification complete (Day 17):
+       amd64 + arm64 archives from CI run 27863179327 pass all package gates;
+       live demo confirmed twice from packaged amd64 archive (CI run 27887911218);
+       evidence/day-17.md: READY FOR v0.1.0-rc1 TAG
 - [ ] Real two-node k3s/flannel validation: cross-node pod traffic on flannel.1 port 8472 (V1)
 - [ ] CNI validation: PTB_DELIVERED or VXLAN_FRAGMENTATION_OBSERVED confirmed on real CNI traffic (V1)
 

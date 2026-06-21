@@ -861,3 +861,167 @@ Loader unit tests: `ok  github.com/mansoormmamnoon/vxlan-tracer/internal/loader 
 **Result:** PASS (6/6) — first x86_64 run including port 8472
 **Caveat:** Preflight ENVIRONMENT failure (ip link add dummy blocked); step has `continue-on-error: true`;
 job conclusion was PASS. Netns lab only. See evidence/day-13-x86-8472-result.md.
+
+---
+
+## 2026-06-20 — Day 16: packaged amd64 archive qualification (CI run 27860935576, dev binary)
+
+**Environment:** GitHub Actions ubuntu-22.04 (x86_64), kernel 6.8.0-1059-azure
+**Archive:** vxlan-tracer-linux-amd64.tar.gz (dev version, commit 8fbc6f7)
+**Run:** 27860935576, job: build-amd64
+
+verify-release-archive.sh:
+```
+PASS: 25, FAIL: 0 — archive is complete and valid
+```
+Binary --version: `vxlan-tracer dev (commit 8fbc6f7, built unknown)` (dev, not rc1)
+
+Package isolation test (test-release-package-isolation.sh):
+```
+PASS: 32, FAIL: 0 — archive is self-contained
+```
+
+Packaged 6-scenario suite (from extracted archive, no source-tree files):
+```
+Results: 6 passed, 0 failed
+```
+
+**Result:** PASS — structural and scenario gates pass on dev-version archive
+**Caveat:** Binary reports `dev`, not `v0.1.0-rc1`. The version-correct rc1 archive was
+produced in CI run 27863179327. See evidence/day-16-amd64-package.md.
+
+---
+
+## 2026-06-20 — Day 16: packaged arm64 archive qualification (CI run 27860935576, dev binary)
+
+**Environment:** GitHub Actions ubuntu-22.04-arm (aarch64), kernel 6.8.0-1059-azure
+**Archive:** vxlan-tracer-linux-arm64.tar.gz (dev version, commit 8fbc6f7)
+**Run:** 27860935576, job: build-arm64
+
+verify-release-archive.sh: PASS: 25, FAIL: 0
+Package isolation test: PASS: 32, FAIL: 0
+Packaged 6-scenario suite: Results: 6 passed, 0 failed
+
+**Result:** PASS — same gate results as amd64; arm64 BPF objects compiled with `__TARGET_ARCH_arm64`
+**Caveat:** Binary reports `dev`. rc1 arm64 archive from CI run 27863179327. See evidence/day-16-arm64-package.md.
+
+---
+
+## 2026-06-20 — Day 16: human output and PTB_SUPPRESSED confirmation (CI run 27860935585)
+
+**Environment:** GitHub Actions ubuntu-22.04 (x86_64), kernel 6.8.0-1059-azure
+**Run:** 27860935585, job: human-output
+
+VXLAN_FRAGMENTATION_OBSERVED human output:
+```
+Verdict:  VXLAN_FRAGMENTATION_OBSERVED
+Evidence:
+  ip_do_fragment events:   5
+  largest outer IP seen:   1438 B
+  underlay MTU:            1400 B  (outer packet exceeded by 38 B)
+Recommendation:
+  set overlay MTU to 1350 B or lower
+Scope:
+  WARNING: ...
+```
+Check `[PASS] contains Verdict:` and `[PASS] contains Evidence:` confirmed.
+
+PTB_SUPPRESSED human output:
+```
+Verdict:  PTB_SUPPRESSED
+Evidence:
+  PTBs at TC ingress (pre-netfilter): 5
+  PTBs at icmp_rcv  (post-netfilter): 0  ← dropped before kernel
+```
+
+**Result:** PASS — human-readable output confirmed live for both verdict paths
+**Caveat:** See evidence/day-16-human-output-live.md.
+
+---
+
+## 2026-06-20 — Day 16: stale-object integration test (CI run 27860935585)
+
+**Environment:** GitHub Actions ubuntu-22.04 (x86_64), kernel 6.8.0-1059-azure
+**Run:** 27860935585, job: bpf-scenario, step: stale-object integration
+
+Script: `scripts/test-stale-bpf-object.sh`
+Output:
+```
+=== Results: 6 passed, 0 failed ===
+```
+
+6 assertions: stale fixture compiled, binary attaches correctly with fresh objects,
+binary rejects stale objects with correct error message and non-zero exit code,
+TC filters removed after failure, no lingering processes, no stale pin dir.
+
+**Result:** PASS (6/6 assertions) — stale BPF guard confirmed on x86_64
+**Caveat:** See evidence/day-15-stale-object-integration.md and evidence/day-16.md.
+
+---
+
+## 2026-06-20 — Day 16/17: rc1 workflow_dispatch (CI run 27863179327)
+
+**Environment:** GitHub Actions ubuntu-22.04 (x86_64) + ubuntu-22.04-arm (aarch64),
+kernel 6.8.0-1059-azure both runners
+**Trigger:** workflow_dispatch with inputs version=v0.1.0-rc1
+**Commit:** 74cf2d7
+**Run:** 27863179327
+
+Both arches:
+- verify-release-archive.sh: PASS: 25, FAIL: 0
+- test-release-package-isolation.sh: PASS: 32, FAIL: 0
+- Packaged 6-scenario suite: Results: 6 passed, 0 failed
+- combine-checksums: PASS
+
+Binary --version:
+- amd64: `vxlan-tracer v0.1.0-rc1 (commit 74cf2d7, built unknown)` ✓
+- arm64: `vxlan-tracer v0.1.0-rc1 (commit 74cf2d7, built unknown)` ✓
+
+SHA-256:
+- amd64: 238d476d12fa9c567c4efd72b69f9b28b614d22df287d6059ffd7ffdbee90572
+- arm64: ff92458e4526f47e2f9e59404a2ef4bc3bc0bc01cc8c5d3080db7e6a09b5548a
+
+**Result:** PASS — authoritative rc1 build. This is the single qualifying run.
+**Caveat:** See evidence/day-17-rc1-audit.md and evidence/day-17-rc1-artifact-provenance.md.
+
+---
+
+## 2026-06-20 — Day 17: live demo from packaged rc1 amd64 archive (CI run 27887911218)
+
+**Environment:** GitHub Actions ubuntu-22.04 (x86_64), kernel 6.8.0-1059-azure
+**Archive:** vxlan-tracer-linux-amd64.tar.gz (SHA-256 238d476d..., v0.1.0-rc1)
+**Source:** downloaded from CI run 27863179327 (no source-tree files)
+**Run:** 27887911218
+
+Script: `$PKG/scripts/demo.sh` with `BINARY=$PKG/vxlan-tracer` and `BPF_DIR=$PKG/bpf`
+
+Run 1 JSON:
+```json
+{"verdict":"VXLAN_FRAGMENTATION_OBSERVED","fragmentation_scope":"global_corroborated",
+ "overlay":"vxlan0","underlay":"demo-veth1","vxlan_port":4789,"vxlan_vni":42,
+ "overlay_mtu":1450,"underlay_mtu":1400,"recommended_overlay_mtu":1350,
+ "ptb_ingress_total":0,"icmp_rcv_total":0,"frag_events_total":5,"frag_max_skb_len":1438,
+ "max_outer_ip_len":1438}
+```
+
+Assertions run 1:
+```
+[PASS] verdict=VXLAN_FRAGMENTATION_OBSERVED
+[PASS] fragmentation_scope=global_corroborated
+[PASS] max_outer_ip_len=1438 > underlay_mtu=1400
+[PASS] recommended_overlay_mtu=1350 == underlay_mtu(1400) - 50
+```
+
+Cleanup after run 1 (4/4 PASS):
+```
+[PASS] no demo netns remaining
+[PASS] /sys/fs/bpf/vxlan-tracer-demo absent
+[PASS] demo-veth1 absent
+[PASS] no lingering vxlan-tracer process
+```
+
+Run 2 (idempotency): same verdict and scope. No EEXIST, stale map, stale qdisc, or namespace errors.
+Cleanup after run 2: 4/4 PASS.
+
+**Result:** PASS — live demo proven twice from packaged rc1 archive with full cleanup verification
+**Caveat:** amd64 only; arm64 live demo not run. See evidence/day-17-demo-live.md.
