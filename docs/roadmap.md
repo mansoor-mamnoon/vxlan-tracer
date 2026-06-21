@@ -123,6 +123,10 @@ namespace environment. No production deployment required.
        amd64 + arm64 archives from CI run 27863179327 pass all package gates;
        live demo confirmed twice from packaged amd64 archive (CI run 27887911218);
        evidence/day-17.md: READY FOR v0.1.0-rc1 TAG
+- [x] v0.1.0-rc1 released (Day 18):
+       release commit 049d4e2f; authoritative build run 27888450228;
+       demo run 27888597060 PASS; tag v0.1.0-rc1 published;
+       https://github.com/mansoor-mamnoon/vxlan-tracer/releases/tag/v0.1.0-rc1
 - [ ] Real two-node k3s/flannel validation: cross-node pod traffic on flannel.1 port 8472 (V1)
 - [ ] CNI validation: PTB_DELIVERED or VXLAN_FRAGMENTATION_OBSERVED confirmed on real CNI traffic (V1)
 

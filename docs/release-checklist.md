@@ -169,3 +169,32 @@ After tagging, record in `evidence/`:
 - Scenario results at release time
 - `git log --oneline -10` at the release tag
 - SHA-256 checksums of tagged archives
+
+---
+
+## v0.1.0-rc1 — Released (Day 18)
+
+Tag: `v0.1.0-rc1`
+Release commit: `049d4e2f761935a5f36eececc6f85c87b3fda1fe`
+Authoritative package run: `27888450228`
+Demo run: `27888597060`
+GitHub release: https://github.com/mansoor-mamnoon/vxlan-tracer/releases/tag/v0.1.0-rc1
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| Authoritative rc1 workflow run | PASS | CI 27888450228 (workflow_dispatch v0.1.0-rc1) |
+| Both arches: v0.1.0-rc1 version in binary (commit 049d4e2) | PASS | CI 27888450228 |
+| amd64 SHA-256 | `d335d8e4e27d8c98ea900848ff115950cecdf98a7f2c779fa5f8d160fba02a17` | evidence/v0.1.0-rc1-release.md |
+| arm64 SHA-256 | `cd7eb2790d7e320095d1c435f4a1b437a8eba863025c1b3d0e22b017bb357870` | evidence/v0.1.0-rc1-release.md |
+| amd64 verify-release-archive: 25/25 (CI), 23/23 (macOS) | PASS | evidence/v0.1.0-rc1-release.md |
+| arm64 verify-release-archive: 25/25 (CI), 23/23 (macOS) | PASS | evidence/v0.1.0-rc1-release.md |
+| amd64 isolation: 32/32 | PASS | evidence/v0.1.0-rc1-release.md |
+| arm64 isolation: 32/32 | PASS | evidence/v0.1.0-rc1-release.md |
+| amd64 packaged scenarios: 6/6 | PASS | CI 27888450228 |
+| arm64 packaged scenarios: 6/6 | PASS | CI 27888450228 |
+| Live demo run 1 (from CI run 27888450228 archive) | PASS | CI 27888597060 |
+| Live demo run 2 (idempotency) | PASS | CI 27888597060 |
+| Demo cleanup: both runs (4/4 × 2) | PASS | CI 27888597060 |
+| combine-checksums | PASS | CI 27888450228 |
+| Tag target == RELEASE_SHA | PASS | git ls-remote verified |
+| Published assets checksum verification | PASS | both OK after gh release download |
