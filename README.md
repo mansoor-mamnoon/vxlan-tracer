@@ -5,7 +5,7 @@ An eBPF-based diagnostic tool for VXLAN MTU blackholes.
 **Symptom:** small requests work (ping, tiny HTTP), but large requests silently stall
 or fragment (file transfers, kubectl cp, large API payloads). No error is logged.
 
-![vxlan-tracer demo](assets/demo.gif)
+![vxlan-tracer demo](assets/demo.gif) 
 
 **Status:** v0.1.0-rc2 qualification complete — 6/6 packaged scenario variants pass on
 arm64 (5.15.0-181-generic) and amd64 (cross-compiled); TC lifecycle safety tests pass;
